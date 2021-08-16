@@ -1,0 +1,17 @@
+* Text Editor
+A text editor in C, or at least supposed to be so on achieving the MVP
+milestone. Till then this repo tracks the development of alpha
+software, so please /please/ *please* don't attempt to use it in real
+life.
+
+* Installation
+
+#+begin_src console
+$ git clone https://github.com/shoumodip/keimeno
+$ cd keimeno
+$ make
+#+end_src
+
+* Dependencies
+- [[https://www.gnu.org/software/libc/][GNU C library]]
+- [[https://invisible-island.net/ncurses/][Ncurses]]
