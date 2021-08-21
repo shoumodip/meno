@@ -31,4 +31,6 @@
             array + index,                              \
             sizeof(type) * (length - index))
 
+#define MIN(a, b) ((a < b) ? a : b)
+
 #endif // COMMON_H
