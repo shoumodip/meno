@@ -28,6 +28,10 @@ int main(int argc, char **argv)
             running = false;
             break;
 
+        case CTRL('s'):
+            buffer_write(&buffer);
+            break;
+
         case CTRL('<'):
         case KEY_PPAGE:
             buffer_cursor_top(&buffer);

@@ -70,15 +70,15 @@ void buffer_delete(Buffer *buffer, size_t index, size_t count)
  */
 void buffer_read(Buffer *buffer, const char *path, const char *indent)
 {
-    FILE *fp = fopen(path, "r");
-    ASSERT(fp, "could not read file '%s'", path);
+    FILE *file = fopen(path, "r");
+    ASSERT(file, "could not read file '%s'", path);
 
     char *input = NULL;
     size_t n = 0;
     size_t tabsize = strlen(indent);
     ssize_t length;
 
-    while ((length = getline(&input, &n, fp)) != -1) {
+    while ((length = getline(&input, &n, file)) != -1) {
         length -= 1;
 
         Line line = {0};
@@ -107,8 +107,24 @@ void buffer_read(Buffer *buffer, const char *path, const char *indent)
         buffer_append(buffer, line);
     }
 
-    fclose(fp);
+    fclose(file);
+    buffer->file = path;
     if (input) free(input);
+}
+
+/*
+ * Write a buffer to its associated file
+ * @param buffer *Buffer The buffer to write
+ */
+void buffer_write(Buffer *buffer)
+{
+    FILE *file = fopen(buffer->file, "w");
+    ASSERT(file, "could not write file '%s'", buffer->file);
+
+    for (size_t i = 0; i < buffer->length; ++i)
+        fprintf(file, LineFmt "\n", LineArg(buffer->lines[i]));
+
+    fclose(file);
 }
 
 /*
