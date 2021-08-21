@@ -13,9 +13,9 @@ typedef struct {
 #define LineArg(line) (int) line.length, line.text
 
 void line_free(Line *line);
-void line_insert(Line *line, size_t index, char *string, size_t length);
+void line_insert(Line *line, size_t index, const char *string, size_t length);
+void line_append(Line *line, const char *string, size_t count);
 void line_delete(Line *line, size_t index, size_t count);
-void line_append(Line *line, char *string, size_t count);
 Line line_split(Line *line, size_t index);
 
 #endif // LINE_H

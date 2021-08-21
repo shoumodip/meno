@@ -19,7 +19,7 @@ void line_free(Line *line)
  * @param string *char The string to insert
  * @param count size_t The number of bytes in the string to insert
  */
-void line_insert(Line *line, size_t index, char *string, size_t count)
+void line_insert(Line *line, size_t index, const char *string, size_t count)
 {
     // Increase the capacity of the line if required
     if (line->length + count >= line->capacity) {
@@ -45,7 +45,7 @@ void line_insert(Line *line, size_t index, char *string, size_t count)
  * @param string *char The string to insert
  * @param count size_t The number of bytes in the string to insert
  */
-void line_append(Line *line, char *string, size_t count)
+void line_append(Line *line, const char *string, size_t count)
 {
     line_insert(line, line->length, string, count);
 }
@@ -58,11 +58,8 @@ void line_append(Line *line, char *string, size_t count)
  */
 void line_delete(Line *line, size_t index, size_t count)
 {
-    if (index + count < line->length) {
-        memmove(line->text + index,
-                line->text + index + count,
-                line->length - count);
-    }
+    if (index + count < line->length)
+        BSHIFT_ARRAY(line->text, index, count, char, line->length);
 
     line->length -= count;
 }
