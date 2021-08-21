@@ -1,6 +1,9 @@
 #include "buffer.h"
 
-// Reset a buffer
+/*
+ * Free all allocated memory in a buffer
+ * @param buffer *Buffer The buffer to free
+ */
 void buffer_free(Buffer *buffer)
 {
     if (buffer->lines) {
@@ -13,7 +16,12 @@ void buffer_free(Buffer *buffer)
     buffer->length = buffer->capacity = 0;
 }
 
-// Insert a line at a particular index in a buffer
+/*
+ * Insert a line at a particular index in a buffer
+ * @param buffer *Buffer The buffer to insert the line in
+ * @param index size_t The index to insert the line in
+ * @param line Line The line to insert
+ */
 void buffer_insert(Buffer *buffer, size_t index, Line line)
 {
     // Increase the capacity of the buffer if required
@@ -30,13 +38,11 @@ void buffer_insert(Buffer *buffer, size_t index, Line line)
     buffer->lines[index] = line;
 }
 
-// Insert a line at the end of a buffer
-void buffer_append(Buffer *buffer, Line line)
-{
-    buffer_insert(buffer, buffer->length, line);
-}
-
-// Read a file into a buffer
+/*
+ * Read a file into a buffer
+ * @param buffer *Buffer The buffer to read a file into
+ * @param file_path *char The path of the file to read
+ */
 void buffer_read(Buffer *buffer, const char *file_path)
 {
     FILE *fp = fopen(file_path, "r");
@@ -48,8 +54,8 @@ void buffer_read(Buffer *buffer, const char *file_path)
 
     while ((length = getline(&input, &n, fp)) != -1) {
         Line line = {0};
-        line_append(&line, input, length - 1);
-        buffer_append(buffer, line);
+        line_insert(&line, line.length, input, length - 1);
+        buffer_insert(buffer, buffer->length, line);
     }
 
     fclose(fp);

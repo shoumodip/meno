@@ -14,6 +14,6 @@ typedef struct {
 
 void line_free(Line *line);
 void line_insert(Line *line, size_t index, char *string, size_t length);
-void line_append(Line *line, char *string, size_t length);
+void line_delete(Line *line, size_t index, size_t count);
 
 #endif // LINE_H
