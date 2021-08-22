@@ -1,8 +1,7 @@
 * Text Editor
-A text editor in C, or at least supposed to be so on achieving the MVP
-milestone. Till then this repo tracks the development of alpha
-software, so please /please/ *please* don't attempt to use it in real
-life.
+[[./demo.png]]
+
+A WIP text editor in C.
 
 * Installation
 
