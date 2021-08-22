@@ -187,26 +187,25 @@ void io_buffer(Buffer *buffer)
             String pattern = {0};
             if (!io_query(&pattern, "Search")) break;
 
-            bool searching = buffer_search(buffer, pattern, ch == CTRL('s'), true);
+            bool searching = buffer_search(buffer, pattern, ch == CTRL('s'), true, true);
             while (searching) {
                 io_render(buffer, false);
                 ch = getch();
 
                 switch (ch) {
                 case CTRL('s'):
-                    searching = buffer_search(buffer, pattern, true, true);
+                    searching = buffer_search(buffer, pattern, true, true, true);
                     break;
                 case CTRL('r'):
-                    searching = buffer_search(buffer, pattern, false, true);
+                    searching = buffer_search(buffer, pattern, false, true, true);
                     break;
                 case ERR: break;
                 default:
+                    searched = true;
                     searching = false;
                     break;
                 }
             }
-
-            searched = true;
             break;
         }
 
@@ -214,13 +213,13 @@ void io_buffer(Buffer *buffer)
             String pattern = {0};
             if (!io_query(&pattern, "Search")) break;
 
-            if (buffer_search(buffer, pattern, true, true)) {
+            if (buffer_search(buffer, pattern, true, true, true)) {
                 io_render(buffer, false);
 
                 String replacement = {0};
                 if (!io_query(&replacement, "Replace")) break;
 
-                buffer_replace(buffer, pattern, replacement);
+                buffer_replace(buffer, pattern, replacement, true);
             }
             break;
         }

@@ -17,6 +17,6 @@ void string_insert(String *string, size_t index, const char *source, size_t leng
 void string_append(String *string, const char *source, size_t count);
 void string_delete(String *string, size_t index, size_t count);
 String string_split(String *string, size_t index);
-int string_search(String string, String pattern, size_t start, bool forward);
+int string_search(String string, String pattern, size_t start, bool forward, bool ignorecase);
 
 #endif // STRING_H

@@ -90,18 +90,27 @@ String string_split(String *string, size_t index)
  * @param pattern String The pattern to search
  * @param start size_t The index to start searching from
  * @param forward bool Whether searching is being performed forward
+ * @param ignorecase bool Whether the case is ignored while searching
  */
-int string_search(String string, String pattern, size_t start, bool forward)
+int string_search(String string, String pattern, size_t start, bool forward, bool ignorecase)
 {
     if (string.length > pattern.length) {
-        if (forward) {
-            for (size_t i = start + 1; i < string.length - pattern.length; ++i)
-                if (memcmp(string.chars + i, pattern.chars, pattern.length) == 0)
+        int i = start;
+
+        while (true) {
+            if (forward) {
+                if ((size_t) ++i >= string.length - pattern.length) break;
+            } else {
+                if (--i <= 0) break;
+            }
+
+            if (ignorecase) {
+                if (strncasecmp(string.chars + i, pattern.chars, pattern.length) == 0)
                     return i;
-        } else {
-            for (int i = start - 1; i > 0; --i)
-                if (memcmp(string.chars + i, pattern.chars, pattern.length) == 0)
-                    return (int) i;
+            } else {
+                if (strncmp(string.chars + i, pattern.chars, pattern.length) == 0)
+                    return i;
+            }
         }
     }
 

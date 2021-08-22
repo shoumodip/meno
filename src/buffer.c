@@ -238,57 +238,43 @@ void buffer_cursor_end(Buffer *buffer)
  * @param pattern String The string to search in the buffer
  * @param forward bool Whether the direction is performed forward
  * @param wrap bool Whether searching wraps at the ends
+ * @param ignorecase bool Whether the case is ignored while searching
  * @return bool Whether the search was successful or not
  */
-bool buffer_search(Buffer *buffer, String pattern, bool forward, bool wrap)
+bool buffer_search(Buffer *buffer, String pattern, bool forward, bool wrap, bool ignorecase)
 {
     bool searched = false;
-    size_t row = buffer->row;
+    int row = buffer->row;
+    int col = (forward) ? buffer->col + 1 : buffer->col - 1;
 
-    if (forward) {
-        int col = buffer->col + 1;
-        while (!searched || row != buffer->row || col > (int) buffer->row) {
-            searched = true;
+    while (true) {
+        if ((col = string_search(buffer->lines[row], pattern, col, forward, ignorecase)) != -1) {
+            buffer->row = row;
+            buffer->col = col;
+            return true;
+        } else if (searched && row == (int) buffer->row) {
+            break;
+        }
 
-            if ((col = string_search(buffer->lines[row], pattern, col, forward)) != -1) {
-                buffer->row = row;
-                buffer->col = col;
-                return true;
-            }
+        searched = true;
 
-            if (row < buffer->lines_count) {
-                row++;
-            } else {
+        if (forward) {
+            if (++row == (int) buffer->lines_count) {
                 if (wrap) {
                     row = 0;
                 } else {
                     break;
                 }
             }
-
             col = 0;
-        }
-    } else {
-        int col = buffer->col - 1;
-        while (!searched || row != buffer->row || col < (int) buffer->row) {
-            searched = true;
-
-            if ((col = string_search(buffer->lines[row], pattern, col, forward)) != -1) {
-                buffer->row = row;
-                buffer->col = col;
-                return true;
-            }
-
-            if (row > 0) {
-                row--;
-            } else {
+        } else {
+            if (--row < 0) {
                 if (wrap) {
-                    row = buffer->lines_count;
+                    row = buffer->lines_count - 1;
                 } else {
                     break;
                 }
             }
-
             col = buffer->lines[row].length;
         }
     }
@@ -301,8 +287,9 @@ bool buffer_search(Buffer *buffer, String pattern, bool forward, bool wrap)
  * @param buffer *Buffer The buffer to perform the replacements in
  * @param pattern String The pattern to replace
  * @param replacement String The replacement for the patter
+ * @param ignorecase bool Whether the case is ignored while searching
  */
-void buffer_replace(Buffer *buffer, String pattern, String replacement)
+void buffer_replace(Buffer *buffer, String pattern, String replacement, bool ignorecase)
 {
     size_t orig_row = buffer->row;
     size_t orig_col = buffer->col;
@@ -310,7 +297,7 @@ void buffer_replace(Buffer *buffer, String pattern, String replacement)
     buffer->row = 0;
     buffer->col = 0;
 
-    while (buffer_search(buffer, pattern, true, false)) {
+    while (buffer_search(buffer, pattern, true, false, ignorecase)) {
         string_delete(&buffer->lines[buffer->row], buffer->col, pattern.length);
         string_insert(&buffer->lines[buffer->row], buffer->col,
                       replacement.chars, replacement.length);
