@@ -4,7 +4,7 @@
 #include "buffer.h"
 
 void io_render(Buffer *buffer, bool status);
-String io_query(const char *prompt);
+bool io_query(String *input, const char *prompt);
 void io_buffer(Buffer *buffer);
 
 #endif // IO_H

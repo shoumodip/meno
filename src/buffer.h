@@ -31,7 +31,8 @@ void buffer_cursor_top(Buffer *buffer);
 void buffer_cursor_bottom(Buffer *buffer);
 void buffer_cursor_start(Buffer *buffer);
 void buffer_cursor_end(Buffer *buffer);
-void buffer_search(Buffer *buffer, String pattern, bool forward);
+bool buffer_search(Buffer *buffer, String pattern, bool forward, bool wrap);
+void buffer_replace(Buffer *buffer, String pattern, String replacement);
 
 void buffer_delete_left(Buffer *buffer);
 void buffer_delete_right(Buffer *buffer);

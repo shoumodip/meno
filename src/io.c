@@ -25,10 +25,11 @@ void io_render(Buffer *buffer, bool status)
 
 /*
  * Get input from the user from the statusline area
+ * @param input *String The string to input into
  * @param prompt *char The prompt to display
- * @return String The input string from the user
+ * @return bool Whether the input was successful
  */
-String io_query(const char *prompt)
+bool io_query(String *input, const char *prompt)
 {
     int x, y;
     getyx(stdscr, y, x);
@@ -36,37 +37,33 @@ String io_query(const char *prompt)
     move(LINES - 1, 0);
     printw("%s: ", prompt);
 
-    String input = {0};
     int ch;
     size_t origin = strlen(prompt) + 2;
     size_t col = 0;
-    bool running = true;
 
     char whitespace[COLS];
     memset(whitespace, ' ', COLS);
 
-    while (running) {
+    while (true) {
         move(LINES - 1, origin);
 
-        if (input.chars) printw(StringFmt, StringArg(input));
-        printw("%.*s", COLS - (int) input.length, whitespace);
+        if (input->chars) printw(StringFmt, StringArg(*input));
+        printw("%.*s", COLS - (int) input->length, whitespace);
 
         move(LINES - 1, origin + col);
 
         ch = getch();
         switch (ch) {
         case CTRL('q'):
-            string_free(&input);
-            running = false;
-            break;
+            string_free(input);
+            return false;
 
         case 10:
-            running = false;
-            break;
+            return true;
 
         case CTRL('f'):
         case KEY_RIGHT:
-            col = min(input.length, col + 1);
+            col = min(input->length, col + 1);
             break;
 
         case CTRL('b'):
@@ -81,23 +78,23 @@ String io_query(const char *prompt)
 
         case CTRL('e'):
         case KEY_END:
-            col = input.length;
+            col = input->length;
             break;
 
         case CTRL('k'):
         case KEY_BACKSPACE:
-            if (col > 0) string_delete(&input, --col, 1);
+            if (col > 0) string_delete(input, --col, 1);
             break;
 
         case CTRL('d'):
         case KEY_DC:
-            if (col < input.length) string_delete(&input, col, 1);
+            if (col < input->length) string_delete(input, col, 1);
             break;
 
         case ERR: break;
 
         default:
-            if (ch != '\n') string_insert(&input, col++, (char *) &ch, 1);
+            if (ch != '\n') string_insert(input, col++, (char *) &ch, 1);
         }
     }
 
@@ -187,20 +184,20 @@ void io_buffer(Buffer *buffer)
 
         case CTRL('r'):
         case CTRL('s'): {
-            String pattern = io_query("Search");
-            buffer_search(buffer, pattern, ch == CTRL('s'));
+            String pattern = {0};
+            if (!io_query(&pattern, "Search")) break;
 
-            bool searching = true;
+            bool searching = buffer_search(buffer, pattern, ch == CTRL('s'), true);
             while (searching) {
                 io_render(buffer, false);
                 ch = getch();
 
                 switch (ch) {
                 case CTRL('s'):
-                    buffer_search(buffer, pattern, true);
+                    searching = buffer_search(buffer, pattern, true, true);
                     break;
                 case CTRL('r'):
-                    buffer_search(buffer, pattern, false);
+                    searching = buffer_search(buffer, pattern, false, true);
                     break;
                 case ERR: break;
                 default:
@@ -210,6 +207,21 @@ void io_buffer(Buffer *buffer)
             }
 
             searched = true;
+            break;
+        }
+
+        case CTRL('z'): {
+            String pattern = {0};
+            if (!io_query(&pattern, "Search")) break;
+
+            if (buffer_search(buffer, pattern, true, true)) {
+                io_render(buffer, false);
+
+                String replacement = {0};
+                if (!io_query(&replacement, "Replace")) break;
+
+                buffer_replace(buffer, pattern, replacement);
+            }
             break;
         }
 

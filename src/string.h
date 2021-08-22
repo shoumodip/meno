@@ -10,7 +10,7 @@ typedef struct {
 } String;
 
 #define StringFmt "%.*s"
-#define StringArg(string) (int) string.length, string.chars
+#define StringArg(string) (int) (string).length, (string).chars
 
 void string_free(String *string);
 void string_insert(String *string, size_t index, const char *source, size_t length);

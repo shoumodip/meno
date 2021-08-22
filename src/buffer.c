@@ -237,8 +237,10 @@ void buffer_cursor_end(Buffer *buffer)
  * @param buffer *Buffer The buffer to search the term in
  * @param pattern String The string to search in the buffer
  * @param forward bool Whether the direction is performed forward
+ * @param wrap bool Whether searching wraps at the ends
+ * @return bool Whether the search was successful or not
  */
-void buffer_search(Buffer *buffer, String pattern, bool forward)
+bool buffer_search(Buffer *buffer, String pattern, bool forward, bool wrap)
 {
     bool searched = false;
     size_t row = buffer->row;
@@ -251,10 +253,19 @@ void buffer_search(Buffer *buffer, String pattern, bool forward)
             if ((col = string_search(buffer->lines[row], pattern, col, forward)) != -1) {
                 buffer->row = row;
                 buffer->col = col;
-                break;
+                return true;
             }
 
-            row = (row < buffer->lines_count) ? row + 1 : 0;
+            if (row < buffer->lines_count) {
+                row++;
+            } else {
+                if (wrap) {
+                    row = 0;
+                } else {
+                    break;
+                }
+            }
+
             col = 0;
         }
     } else {
@@ -265,13 +276,48 @@ void buffer_search(Buffer *buffer, String pattern, bool forward)
             if ((col = string_search(buffer->lines[row], pattern, col, forward)) != -1) {
                 buffer->row = row;
                 buffer->col = col;
-                break;
+                return true;
             }
 
-            row = (row > 0) ? row - 1 : buffer->lines_count;
+            if (row > 0) {
+                row--;
+            } else {
+                if (wrap) {
+                    row = buffer->lines_count;
+                } else {
+                    break;
+                }
+            }
+
             col = buffer->lines[row].length;
         }
     }
+
+    return false;
+}
+
+/*
+ * Replace a pattern with a replacement in a buffer
+ * @param buffer *Buffer The buffer to perform the replacements in
+ * @param pattern String The pattern to replace
+ * @param replacement String The replacement for the patter
+ */
+void buffer_replace(Buffer *buffer, String pattern, String replacement)
+{
+    size_t orig_row = buffer->row;
+    size_t orig_col = buffer->col;
+
+    buffer->row = 0;
+    buffer->col = 0;
+
+    while (buffer_search(buffer, pattern, true, false)) {
+        string_delete(&buffer->lines[buffer->row], buffer->col, pattern.length);
+        string_insert(&buffer->lines[buffer->row], buffer->col,
+                      replacement.chars, replacement.length);
+    }
+
+    buffer->row = orig_row;
+    buffer->col = orig_col;
 }
 
 /*
