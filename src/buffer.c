@@ -7,45 +7,46 @@
 void buffer_free(Buffer *buffer)
 {
     if (buffer->lines) {
-        for (size_t i = 0; i < buffer->length; ++i)
-            line_free(&buffer->lines[i]);
+        for (size_t i = 0; i < buffer->lines_count; ++i)
+            string_free(&buffer->lines[i]);
 
         free(buffer->lines);
     }
 
-    buffer->length = buffer->capacity = buffer->row = buffer->col = 0;
+    buffer->lines_count = buffer->lines_capacity = 0;
+    buffer->row = buffer->col = 0;
 }
 
 /*
  * Insert a line at a particular index in a buffer
  * @param buffer *Buffer The buffer to insert the line in
  * @param index size_t The index to insert the line in
- * @param line Line The line to insert
+ * @param line String The line to insert
  */
-void buffer_insert(Buffer *buffer, size_t index, Line line)
+void buffer_insert(Buffer *buffer, size_t index, String line)
 {
     // Increase the capacity of the buffer if required
-    if (buffer->length >= buffer->capacity) {
-        buffer->capacity = GROW_CAPACITY(buffer->capacity);
-        buffer->lines = GROW_ARRAY(buffer->lines, Line, buffer->capacity);
+    if (buffer->lines_count >= buffer->lines_capacity) {
+        buffer->lines_capacity = GROW_CAPACITY(buffer->lines_capacity);
+        buffer->lines = GROW_ARRAY(buffer->lines, String, buffer->lines_capacity);
     }
 
     // Make space for the line in the buffer if required
-    if (index != buffer->length)
-        SHIFT_ARRAY(buffer->lines, index, 1, Line, buffer->length);
+    if (index != buffer->lines_count)
+        SHIFT_ARRAY(buffer->lines, index, 1, String, buffer->lines_count);
 
-    buffer->length++;
+    buffer->lines_count++;
     buffer->lines[index] = line;
 }
 
 /*
  * Insert a line at the end of a buffer
  * @param buffer *Buffer The buffer to insert the line in
- * @param line Line The line to insert
+ * @param line String The line to insert
  */
-void buffer_append(Buffer *buffer, Line line)
+void buffer_append(Buffer *buffer, String line)
 {
-    buffer_insert(buffer, buffer->length, line);
+    buffer_insert(buffer, buffer->lines_count, line);
 }
 
 /*
@@ -56,10 +57,10 @@ void buffer_append(Buffer *buffer, Line line)
  */
 void buffer_delete(Buffer *buffer, size_t index, size_t count)
 {
-    if (index + count < buffer->length)
-        BSHIFT_ARRAY(buffer->lines, index, count, Line, buffer->length);
+    if (index + count < buffer->lines_count)
+        BSHIFT_ARRAY(buffer->lines, index, count, String, buffer->lines_count);
 
-    buffer->length -= count;
+    buffer->lines_count -= count;
 }
 
 /*
@@ -81,7 +82,7 @@ void buffer_read(Buffer *buffer, const char *path, const char *indent)
     while ((length = getline(&input, &n, file)) != -1) {
         length -= 1;
 
-        Line line = {0};
+        String line = {0};
 
         size_t offset = 0;
         size_t count = 0;
@@ -92,17 +93,17 @@ void buffer_read(Buffer *buffer, const char *path, const char *indent)
 
             if (tab) {
                 count = (size_t) (tab - input) - offset;
-                line_append(&line, input + offset, count);
-                line_append(&line, indent, tabsize);
+                string_append(&line, input + offset, count);
+                string_append(&line, indent, tabsize);
                 offset += count + 1;
             } else {
                 count = (size_t) length - offset;
-                line_append(&line, input + offset, count);
+                string_append(&line, input + offset, count);
                 offset += count;
             }
         }
 
-        if (length == 0) line_append(&line, "", 0);
+        if (length == 0) string_append(&line, "", 0);
 
         buffer_append(buffer, line);
     }
@@ -121,8 +122,8 @@ void buffer_write(Buffer *buffer)
     FILE *file = fopen(buffer->file, "w");
     ASSERT(file, "could not write file '%s'", buffer->file);
 
-    for (size_t i = 0; i < buffer->length; ++i)
-        fprintf(file, LineFmt "\n", LineArg(buffer->lines[i]));
+    for (size_t i = 0; i < buffer->lines_count; ++i)
+        fprintf(file, StringFmt "\n", StringArg(buffer->lines[i]));
 
     fclose(file);
 }
@@ -135,11 +136,11 @@ void buffer_write(Buffer *buffer)
 void buffer_insert_char(Buffer *buffer, char ch)
 {
     if (ch == '\n') {
-        Line next = line_split(&buffer->lines[buffer->row++], buffer->col);
+        String next = string_split(&buffer->lines[buffer->row++], buffer->col);
         buffer_insert(buffer, buffer->row, next);
         buffer->col = 0;
     } else {
-        line_insert(&buffer->lines[buffer->row], buffer->col++, &ch, 1);
+        string_insert(&buffer->lines[buffer->row], buffer->col++, &ch, 1);
     }
 }
 
@@ -159,9 +160,9 @@ void buffer_cursor_up(Buffer *buffer)
  */
 void buffer_cursor_down(Buffer *buffer)
 {
-    if (buffer->row < buffer->length) {
-        buffer->row += 1;
-        buffer->col = (buffer->row == buffer->length)
+    if (buffer->row < buffer->lines_count) {
+        buffer->row++;
+        buffer->col = (buffer->row == buffer->lines_count)
             ? 0
             : min(buffer->lines[buffer->row].length, buffer->col);
     }
@@ -174,7 +175,7 @@ void buffer_cursor_down(Buffer *buffer)
 void buffer_cursor_left(Buffer *buffer)
 {
     if (buffer->col > 0) {
-        buffer->col -= 1;
+        buffer->col--;
     } else if (buffer->row > 0) {
         buffer->col = buffer->lines[--buffer->row].length;
     }
@@ -187,8 +188,8 @@ void buffer_cursor_left(Buffer *buffer)
 void buffer_cursor_right(Buffer *buffer)
 {
     if (buffer->col < buffer->lines[buffer->row].length) {
-        buffer->col += 1;
-    } else if (buffer->row < buffer->length) {
+        buffer->col++;
+    } else if (buffer->row < buffer->lines_count) {
         buffer->row += 1;
         buffer->col = 0;
     }
@@ -209,7 +210,7 @@ void buffer_cursor_top(Buffer *buffer)
  */
 void buffer_cursor_bottom(Buffer *buffer)
 {
-    buffer->row = buffer->length;
+    buffer->row = buffer->lines_count;
     buffer->col = buffer->lines[buffer->row].length;
 }
 
@@ -232,19 +233,61 @@ void buffer_cursor_end(Buffer *buffer)
 }
 
 /*
+ * Search for a pattern in a buffer
+ * @param buffer *Buffer The buffer to search the term in
+ * @param pattern String The string to search in the buffer
+ * @param forward bool Whether the direction is performed forward
+ */
+void buffer_search(Buffer *buffer, String pattern, bool forward)
+{
+    bool searched = false;
+    size_t row = buffer->row;
+
+    if (forward) {
+        int col = buffer->col + 1;
+        while (!searched || row != buffer->row || col > (int) buffer->row) {
+            searched = true;
+
+            if ((col = string_search(buffer->lines[row], pattern, col, forward)) != -1) {
+                buffer->row = row;
+                buffer->col = col;
+                break;
+            }
+
+            row = (row < buffer->lines_count) ? row + 1 : 0;
+            col = 0;
+        }
+    } else {
+        int col = buffer->col - 1;
+        while (!searched || row != buffer->row || col < (int) buffer->row) {
+            searched = true;
+
+            if ((col = string_search(buffer->lines[row], pattern, col, forward)) != -1) {
+                buffer->row = row;
+                buffer->col = col;
+                break;
+            }
+
+            row = (row > 0) ? row - 1 : buffer->lines_count;
+            col = buffer->lines[row].length;
+        }
+    }
+}
+
+/*
  * Delete the character left of the cursor in a buffer
  * @param buffer *Buffer The buffer to delete in
  */
 void buffer_delete_left(Buffer *buffer)
 {
     if (buffer->col > 0) {
-        line_delete(&buffer->lines[buffer->row], --buffer->col, 1);
+        string_delete(&buffer->lines[buffer->row], --buffer->col, 1);
     } else if (buffer->row > 0) {
-        Line current = buffer->lines[buffer->row];
+        String current = buffer->lines[buffer->row];
         buffer->col = buffer->lines[buffer->row - 1].length;
 
-        line_append(&buffer->lines[buffer->row - 1], current.text, current.length);
-        line_free(&current);
+        string_append(&buffer->lines[buffer->row - 1], current.chars, current.length);
+        string_free(&current);
         buffer_delete(buffer, buffer->row--, 1);
     }
 }
@@ -256,11 +299,11 @@ void buffer_delete_left(Buffer *buffer)
 void buffer_delete_right(Buffer *buffer)
 {
     if (buffer->col < buffer->lines[buffer->row].length) {
-        line_delete(&buffer->lines[buffer->row], buffer->col, 1);
-    } else if (buffer->length > buffer->row) {
-        Line next = buffer->lines[buffer->row + 1];
-        line_append(&buffer->lines[buffer->row], next.text, next.length);
-        line_free(&next);
+        string_delete(&buffer->lines[buffer->row], buffer->col, 1);
+    } else if (buffer->lines_count > buffer->row) {
+        String next = buffer->lines[buffer->row + 1];
+        string_append(&buffer->lines[buffer->row], next.chars, next.length);
+        string_free(&next);
         buffer_delete(buffer, buffer->row + 1, 1);
     }
 }

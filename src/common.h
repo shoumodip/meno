@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <ncurses.h>
 
 #define MINIMUM_CAPACITY 128
 
@@ -21,14 +22,24 @@
 #define CTRL(k) ((k) & 0x1f)
 
 /*
- * Assert a condition
+ * Assert a condition, quitting if false
  */
-#define ASSERT(condition, ...)                  \
+#define ASSERTQ(condition, ...)                 \
     if (!(condition)) {                         \
         fprintf(stderr, "error: ");             \
         fprintf(stderr, __VA_ARGS__);           \
         fprintf(stderr, "\n");                  \
         exit(1);                                \
+    }
+
+/*
+ * Assert a condition
+ */
+#define ASSERT(condition, ...)                  \
+    if (!(condition)) {                         \
+        move(LINES - 1, 0);                     \
+        printw("error: ");                      \
+        printw(__VA_ARGS__);                    \
     }
 
 /*
