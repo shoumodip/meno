@@ -8,19 +8,35 @@
 void io_render(Buffer *buffer, bool status)
 {
     clear();
+    size_t lines = 0;
+    size_t total = LINES - 1;
 
-    size_t anchor_start = (buffer->row / (LINES - 1)) * (LINES - 1);
-    size_t anchor_end = min(anchor_start + LINES - 1, buffer->lines_count);
+    size_t anchor_start = (buffer->row / total) * total;
+    size_t anchor_end = min(anchor_start + total, buffer->lines_count);
 
-    for (size_t i = anchor_start; i < anchor_end; ++i)
-        printw(StringFmt "\n", StringArg(buffer->lines[i]));
+    size_t lines_count = buffer->lines_count + 1;
+    size_t line_space = 1;
+    for (size_t i = lines_count; i != 0; i /= 10) line_space++;
+
+    for (size_t i = anchor_start; i < anchor_end; ++i) {
+        lines += buffer->lines[i].length / COLS + 1;
+
+        printw("%*zu ", line_space, i + 1);
+        if (lines == total) {
+            printw(StringFmt "\n", min(buffer->lines[i].length, COLS - line_space), buffer->lines[i].chars);
+        } else {
+            printw(StringFmt "\n", StringArg(buffer->lines[i]));
+        }
+
+        if (lines >= total) break;
+    }
 
     if (status) {
-        move(LINES - 1, 0);
+        move(total, 0);
         printw("%s (%zu:%zu)", buffer->file, buffer->row, buffer->col);
     }
 
-    move(buffer->row % (LINES - 1), buffer->col);
+    move(buffer->row % (total), buffer->col + line_space + 1);
 }
 
 /*
