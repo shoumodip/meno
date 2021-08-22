@@ -15,6 +15,23 @@ void string_free(String *string)
 }
 
 /*
+ * Grow a string to a particular capacity
+ * @param string *String The string to grow
+ * @param capacity size_t The capacity to grow the string to
+ */
+void string_grow(String *string, size_t capacity)
+{
+    if (capacity > string->capacity) {
+        string->capacity = GROW_CAPACITY(string->capacity);
+
+        if (string->capacity < capacity)
+            string->capacity = capacity;
+
+        string->chars = GROW_ARRAY(string->chars, char, string->capacity);
+    }
+}
+
+/*
  * Insert a C-string at a particular index in a string
  * @param string *String The string to insert the C-string in
  * @param index size_t The index to insert the C-string in
@@ -24,14 +41,7 @@ void string_free(String *string)
 void string_insert(String *string, size_t index, const char *source, size_t count)
 {
     // Increase the capacity of the string if required
-    if (string->length + count >= string->capacity) {
-        string->capacity = GROW_CAPACITY(string->capacity);
-
-        if (string->capacity < count)
-            string->capacity = count;
-
-        string->chars = GROW_ARRAY(string->chars, char, string->capacity);
-    }
+    string_grow(string, string->length + count);
 
     // Make space for the string in the string if required
     if (index != string->length)

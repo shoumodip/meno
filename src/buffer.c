@@ -71,8 +71,9 @@ void buffer_delete(Buffer *buffer, size_t index, size_t count)
  */
 void buffer_read(Buffer *buffer, const char *path, const char *indent)
 {
-    FILE *file = fopen(path, "r");
-    ASSERT(file, "could not read file '%s'", path);
+    buffer->file = path;
+    FILE *file = fopen(buffer->file, "r");
+    if (!file) return;
 
     char *input = NULL;
     size_t n = 0;
@@ -109,7 +110,6 @@ void buffer_read(Buffer *buffer, const char *path, const char *indent)
     }
 
     fclose(file);
-    buffer->file = path;
     if (input) free(input);
 }
 
@@ -120,7 +120,10 @@ void buffer_read(Buffer *buffer, const char *path, const char *indent)
 void buffer_write(Buffer *buffer)
 {
     FILE *file = fopen(buffer->file, "w");
-    ASSERT(file, "could not write file '%s'", buffer->file);
+    if (!file) {
+        ERROR("could not write '%s'", buffer->file);
+        return;
+    }
 
     for (size_t i = 0; i < buffer->lines_count; ++i)
         fprintf(file, StringFmt "\n", StringArg(buffer->lines[i]));
@@ -135,10 +138,19 @@ void buffer_write(Buffer *buffer)
  */
 void buffer_insert_char(Buffer *buffer, char ch)
 {
+    if (buffer->row == buffer->lines_count) {
+        String new = {0};
+        buffer_append(buffer, new);
+    }
+
     if (ch == '\n') {
         String next = string_split(&buffer->lines[buffer->row++], buffer->col);
         buffer_insert(buffer, buffer->row, next);
         buffer->col = 0;
+
+    } else if (ch == '\t') {
+        string_insert(&buffer->lines[buffer->row], buffer->col, "    ", 4);
+        buffer->col += 4;
     } else {
         string_insert(&buffer->lines[buffer->row], buffer->col++, &ch, 1);
     }
@@ -253,6 +265,7 @@ bool buffer_search(Buffer *buffer, String pattern, bool forward, bool wrap, bool
             buffer->col = col;
             return true;
         } else if (searched && row == (int) buffer->row) {
+            ERROR("pattern '" StringFmt "' not found", StringArg(pattern));
             break;
         }
 

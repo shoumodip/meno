@@ -35,12 +35,17 @@
 /*
  * Assert a condition
  */
-#define ASSERT(condition, ...)                  \
-    if (!(condition)) {                         \
+#define ERROR(...)                              \
+    do {                                        \
+        move(LINES - 1, 0);                     \
+        char whitespace[COLS];                  \
+        memset(whitespace, ' ', COLS);          \
+        printw("%.*s", COLS, whitespace);       \
         move(LINES - 1, 0);                     \
         printw("error: ");                      \
         printw(__VA_ARGS__);                    \
-    }
+        getch();                                \
+    } while (false);
 
 /*
  * Grow a capacity value incrementally

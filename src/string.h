@@ -13,6 +13,7 @@ typedef struct {
 #define StringArg(string) (int) (string).length, (string).chars
 
 void string_free(String *string);
+void string_grow(String *string, size_t capacity);
 void string_insert(String *string, size_t index, const char *source, size_t length);
 void string_append(String *string, const char *source, size_t count);
 void string_delete(String *string, size_t index, size_t count);

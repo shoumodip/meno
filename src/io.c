@@ -8,35 +8,34 @@
 void io_render(Buffer *buffer, bool status)
 {
     clear();
-    size_t lines = 0;
-    size_t total = LINES - 1;
 
-    size_t anchor_start = (buffer->row / total) * total;
-    size_t anchor_end = min(anchor_start + total, buffer->lines_count);
+    const size_t height = LINES - 1;
+    const size_t anchor_start = (buffer->row / height) * height;
+    const size_t anchor_end = min(anchor_start + height, buffer->lines_count);
 
-    size_t lines_count = buffer->lines_count + 1;
-    size_t line_space = 1;
-    for (size_t i = lines_count; i != 0; i /= 10) line_space++;
+    size_t line_space = 2;
+    for (size_t i = buffer->lines_count + 1; i != 0; i /= 10) line_space++;
 
+    const size_t width = COLS - line_space;
+    const size_t dx = (buffer->col / width) * width;
     for (size_t i = anchor_start; i < anchor_end; ++i) {
-        lines += buffer->lines[i].length / COLS + 1;
+        printw("%*zu ", line_space - 1, i + 1);
 
-        printw("%*zu ", line_space, i + 1);
-        if (lines == total) {
-            printw(StringFmt "\n", min(buffer->lines[i].length, COLS - line_space), buffer->lines[i].chars);
-        } else {
-            printw(StringFmt "\n", StringArg(buffer->lines[i]));
+        if (buffer->lines[i].length > dx) {
+            printw(StringFmt,
+                   min(buffer->lines[i].length - dx, width),
+                   buffer->lines[i].chars + dx);
         }
 
-        if (lines >= total) break;
+        if (buffer->lines[i].length < dx + width) addch('\n');
     }
 
     if (status) {
-        move(total, 0);
-        printw("%s (%zu:%zu)", buffer->file, buffer->row, buffer->col);
+        move(height, 0);
+        printw("%s (%zu:%zu)", buffer->file, buffer->row + 1, buffer->col);
     }
 
-    move(buffer->row % (total), buffer->col + line_space + 1);
+    move(buffer->row % height, line_space + buffer->col - dx);
 }
 
 /*
@@ -148,12 +147,12 @@ void io_buffer(Buffer *buffer)
             buffer_write(buffer);
             break;
 
-        case CTRL('<'):
+        case CTRL('g'):
         case KEY_PPAGE:
             buffer_cursor_top(buffer);
             break;
 
-        case CTRL('>'):
+        case CTRL('h'):
         case KEY_NPAGE:
             buffer_cursor_bottom(buffer);
             break;
@@ -216,6 +215,9 @@ void io_buffer(Buffer *buffer)
                     searching = buffer_search(buffer, pattern, false, true, true);
                     break;
                 case ERR: break;
+                case CTRL('q'):
+                    searching = false;
+                    break;
                 default:
                     searched = true;
                     searching = false;
