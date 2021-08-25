@@ -1,4 +1,4 @@
-#include "io.h"
+#include "ui.h"
 
 int main(int argc, char **argv)
 {
@@ -11,7 +11,7 @@ int main(int argc, char **argv)
 
     Buffer buffer = {0};
     buffer_read(&buffer, argv[1], "    ");
-    io_buffer(&buffer);
+    ui_buffer(&buffer);
     buffer_free(&buffer);
     endwin();
 }

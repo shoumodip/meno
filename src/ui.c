@@ -1,11 +1,11 @@
-#include "io.h"
+#include "ui.h"
 
 /*
  * Render the buffer
  * @param buffer *Buffer The buffer to render
  * @param status bool Whether the statusline has to be rendered
  */
-void io_render(Buffer *buffer, bool status)
+void ui_render(Buffer *buffer, bool status)
 {
     clear();
 
@@ -44,7 +44,7 @@ void io_render(Buffer *buffer, bool status)
  * @param prompt *char The prompt to display
  * @return bool Whether the input was successful
  */
-bool io_query(String *input, const char *prompt)
+bool ui_query(String *input, const char *prompt)
 {
     int x, y;
     getyx(stdscr, y, x);
@@ -120,17 +120,17 @@ bool io_query(String *input, const char *prompt)
 }
 
 /*
- * IO for a buffer
- * @param buffer *Buffer The buffer to perform IO for
+ * UI for a buffer
+ * @param buffer *Buffer The buffer to perform UI for
  */
-void io_buffer(Buffer *buffer)
+void ui_buffer(Buffer *buffer)
 {
     int ch;
     bool running = true;
     bool searched = false;
 
     while (running) {
-        io_render(buffer, true);
+        ui_render(buffer, true);
 
         if (searched) {
             searched = false;
@@ -200,11 +200,11 @@ void io_buffer(Buffer *buffer)
         case CTRL('r'):
         case CTRL('s'): {
             String pattern = {0};
-            if (!io_query(&pattern, "Search")) break;
+            if (!ui_query(&pattern, "Search")) break;
 
             bool searching = buffer_search(buffer, pattern, ch == CTRL('s'), true, true);
             while (searching) {
-                io_render(buffer, false);
+                ui_render(buffer, false);
                 ch = getch();
 
                 switch (ch) {
@@ -229,13 +229,13 @@ void io_buffer(Buffer *buffer)
 
         case CTRL('z'): {
             String pattern = {0};
-            if (!io_query(&pattern, "Search")) break;
+            if (!ui_query(&pattern, "Search")) break;
 
             if (buffer_search(buffer, pattern, true, true, true)) {
-                io_render(buffer, false);
+                ui_render(buffer, false);
 
                 String replacement = {0};
-                if (!io_query(&replacement, "Replace")) break;
+                if (!ui_query(&replacement, "Replace")) break;
 
                 buffer_replace(buffer, pattern, replacement, true);
             }
