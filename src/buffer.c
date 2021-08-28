@@ -1,5 +1,63 @@
 #include "buffer.h"
 
+static bool buffer_search_forward(Buffer *buffer, String term, Vec2D *cursor, size_t limit);
+static bool buffer_search_backward(Buffer *buffer, String term, Vec2D *cursor, size_t limit);
+
+/*
+ * Search for a term forward in a buffer
+ * @param buffer *Buffer The buffer to search in
+ * @param term String The string to search
+ * @param cursor *Vec2D The cursor to move
+ * @param limit size_t The limit to stop searching before
+ * @return bool Whether the searching was successful
+ */
+bool buffer_search_forward(Buffer *buffer, String term, Vec2D *cursor, size_t limit)
+{
+    int position;
+    while (cursor->y < limit) {
+        position = string_next_term(buffer->lines[cursor->y],
+                                        term, cursor->x);
+
+        if (position == -1) {
+            cursor->y++;
+            cursor->x = 0;
+        } else {
+            cursor->x = position;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/*
+ * Search for a term backward in a buffer
+ * @param buffer *Buffer The buffer to search in
+ * @param term String The string to search
+ * @param cursor *Vec2D The cursor to move
+ * @param limit size_t The limit to stop searching before
+ * @return bool Whether the searching was successful
+ */
+bool buffer_search_backward(Buffer *buffer, String term, Vec2D *cursor, size_t limit)
+{
+    int position;
+    while (cursor->y >= limit) {
+        position = string_prev_term(buffer->lines[cursor->y],
+                                        term, cursor->x);
+
+        if (position == -1) {
+            if (cursor->y == 0) return false;
+            cursor->y--;
+            cursor->x = buffer->lines[cursor->y].length;
+        } else {
+            cursor->x = position;
+            return true;
+        }
+    }
+
+    return false;
+}
+
 /*
  * Free all allocated memory in a buffer
  * @param buffer *Buffer The buffer to free
@@ -7,14 +65,80 @@
 void buffer_free(Buffer *buffer)
 {
     if (buffer->lines) {
-        for (size_t i = 0; i < buffer->lines_count; ++i)
+        for (size_t i = 0; i < buffer->length; ++i)
             string_free(&buffer->lines[i]);
 
         free(buffer->lines);
     }
 
-    buffer->lines_count = buffer->lines_capacity = 0;
-    buffer->row = buffer->col = 0;
+    buffer->length = buffer->capacity = 0;
+    buffer->cursor.x = buffer->cursor.y = 0;
+}
+
+/*
+ * Read the buffer from its associated file
+ * @param buffer *Buffer The buffer to read
+ */
+void buffer_read(Buffer *buffer)
+{
+    if (buffer->file.length == 0) goto fill_buffer;
+    FILE *file = fopen(buffer->file.chars, "r");
+    if (!file) goto fill_buffer;
+
+    char *input = NULL;
+    size_t n = 0;
+    ssize_t length;
+
+    while ((length = getline(&input, &n, file)) != -1) {
+        if (input[length - 1] == '\n') length -= 1;
+
+        String line = {0};
+        string_insert(&line, 0, input, length);
+        buffer_set_line(buffer, buffer->length, line);
+    }
+
+    fclose(file);
+    if (input) free(input);
+
+    // The buffer has to have atleast one line in it otherwise it may result in
+    // illegal memory access, aka segfaults
+ fill_buffer:
+    if (buffer->length == 0) buffer_insert_line(buffer, 0, (String) {0});
+}
+
+/*
+ * Save the buffer to its associated file
+ * @param buffer *Buffer The buffer to save
+ */
+void buffer_save(Buffer *buffer)
+{
+    if (buffer->file.length == 0) return;
+    FILE *file = fopen(buffer->file.chars, "w");
+    if (!file) return;
+
+    for (size_t i = 0; i < buffer->length; ++i)
+        fprintf(file, StringFmt "\n", StringArg(buffer->lines[i]));
+
+    fclose(file);
+}
+
+/*
+ * Overwrite a line in a buffer, or insert it
+ * @param buffer *Buffer The buffer to set the line in
+ * @param index size_t The index to set the line in
+ * @param line Line The line to place in the buffer
+ */
+void buffer_set_line(Buffer *buffer, size_t index, String line)
+{
+    if (buffer->length > index) {
+        // A line already exists in the given index, just replace it
+        String *target = &buffer->lines[index];
+        string_replace(target, 0, line.chars, line.length);
+        target->length = line.length;
+    } else {
+        // Insert the line into the buffer
+        buffer_insert_line(buffer, index, line);
+    }
 }
 
 /*
@@ -23,333 +147,405 @@ void buffer_free(Buffer *buffer)
  * @param index size_t The index to insert the line in
  * @param line String The line to insert
  */
-void buffer_insert(Buffer *buffer, size_t index, String line)
+void buffer_insert_line(Buffer *buffer, size_t index, String line)
 {
-    // Increase the capacity of the buffer if required
-    if (buffer->lines_count >= buffer->lines_capacity) {
-        buffer->lines_capacity = GROW_CAPACITY(buffer->lines_capacity);
-        buffer->lines = GROW_ARRAY(buffer->lines, String, buffer->lines_capacity);
+    // Grow the buffer if required
+    if (buffer->length >= buffer->capacity) {
+        buffer->capacity = GROW_CAPACITY(buffer->capacity);
+        buffer->lines = GROW_ARRAY(buffer->lines, String, buffer->capacity);
     }
 
-    // Make space for the line in the buffer if required
-    if (index != buffer->lines_count)
-        SHIFT_ARRAY(buffer->lines, index, 1, String, buffer->lines_count);
+    // Shift the lines in the buffer to make space for the new line
+    if (buffer->cursor.y != buffer->length)
+        SHIFT_ARRAY(buffer->lines, index, 1, String, buffer->length);
 
-    buffer->lines_count++;
+    // Insert the line
+    buffer->length++;
     buffer->lines[index] = line;
 }
 
 /*
- * Insert a line at the end of a buffer
- * @param buffer *Buffer The buffer to insert the line in
- * @param line String The line to insert
- */
-void buffer_append(Buffer *buffer, String line)
-{
-    buffer_insert(buffer, buffer->lines_count, line);
-}
-
-/*
- * Delete lines from a index in a buffer
+ * Delete a line at an index in a buffer
  * @param buffer *Buffer The buffer to to delete the lines in
- * @param index size_t The index to delete the lines from
- * @param count size_t The number of lines to delete
+ * @param index size_t The index of the line to delete
  */
-void buffer_delete(Buffer *buffer, size_t index, size_t count)
+void buffer_delete_line(Buffer *buffer, size_t index)
 {
-    if (index + count < buffer->lines_count)
-        BSHIFT_ARRAY(buffer->lines, index, count, String, buffer->lines_count);
-
-    buffer->lines_count -= count;
+    // Shift back the elements in the buffer
+    if (buffer->cursor.y < buffer->length)
+        BSHIFT_ARRAY(buffer->lines, index, 1, String, buffer->length--);
 }
 
 /*
- * Read a file into a buffer
- * @param buffer *Buffer The buffer to read a file into
- * @param path *char The path of the file to read
- * @param indent *char The indentation string
- */
-void buffer_read(Buffer *buffer, const char *path, const char *indent)
-{
-    buffer->file = path;
-    FILE *file = fopen(buffer->file, "r");
-    if (!file) return;
-
-    char *input = NULL;
-    size_t n = 0;
-    size_t tabsize = strlen(indent);
-    ssize_t length;
-
-    while ((length = getline(&input, &n, file)) != -1) {
-        length -= 1;
-
-        String line = {0};
-
-        size_t offset = 0;
-        size_t count = 0;
-        char *tab = NULL;
-
-        while (offset < (size_t) length) {
-            tab = memchr(input + offset, '\t', length);
-
-            if (tab) {
-                count = (size_t) (tab - input) - offset;
-                string_append(&line, input + offset, count);
-                string_append(&line, indent, tabsize);
-                offset += count + 1;
-            } else {
-                count = (size_t) length - offset;
-                string_append(&line, input + offset, count);
-                offset += count;
-            }
-        }
-
-        if (length == 0) string_append(&line, "", 0);
-
-        buffer_append(buffer, line);
-    }
-
-    fclose(file);
-    if (input) free(input);
-}
-
-/*
- * Write a buffer to its associated file
- * @param buffer *Buffer The buffer to write
- */
-void buffer_write(Buffer *buffer)
-{
-    FILE *file = fopen(buffer->file, "w");
-    if (!file) {
-        ERROR("could not write '%s'", buffer->file);
-        return;
-    }
-
-    for (size_t i = 0; i < buffer->lines_count; ++i)
-        fprintf(file, StringFmt "\n", StringArg(buffer->lines[i]));
-
-    fclose(file);
-}
-
-/*
- * Insert a character at the cursor position in the buffer
+ * Insert a character at the cursor in a buffer
  * @param buffer *Buffer The buffer to insert the character in
  * @param ch char The character to insert
  */
 void buffer_insert_char(Buffer *buffer, char ch)
 {
-    if (buffer->row == buffer->lines_count) {
-        String new = {0};
-        buffer_append(buffer, new);
-    }
-
     if (ch == '\n') {
-        String next = string_split(&buffer->lines[buffer->row++], buffer->col);
-        buffer_insert(buffer, buffer->row, next);
-        buffer->col = 0;
+        // Split the current line into two parts and insert the part after the
+        // cursor as a new line into the buffer
+        String after = string_split(&buffer->lines[buffer->cursor.y],
+                                    buffer->cursor.x);
 
-    } else if (ch == '\t') {
-        string_insert(&buffer->lines[buffer->row], buffer->col, "    ", 4);
-        buffer->col += 4;
+        buffer_insert_line(buffer, ++buffer->cursor.y, after);
+        buffer->cursor.x = 0;
     } else {
-        string_insert(&buffer->lines[buffer->row], buffer->col++, &ch, 1);
+        // Insert the character into the buffer if it is printable
+        string_insert(&buffer->lines[buffer->cursor.y], buffer->cursor.x++, &ch, 1);
     }
 }
 
 /*
- * Move the cursor up one line in the buffer
- * @param buffer *Buffer The buffer to move the cursor in
+ * Motion for moving to the next character
+ * @param buffer *Buffer The buffer to do the motion in
  */
-void buffer_cursor_up(Buffer *buffer)
+void buffer_next_char(Buffer *buffer)
 {
-    if (buffer->row > 0)
-        buffer->col = min(buffer->lines[--buffer->row].length, buffer->col);
-}
-
-/*
- * Move the cursor down one line in the buffer
- * @param buffer *Buffer The buffer to move the cursor in
- */
-void buffer_cursor_down(Buffer *buffer)
-{
-    if (buffer->row < buffer->lines_count) {
-        buffer->row++;
-        buffer->col = (buffer->row == buffer->lines_count)
-            ? 0
-            : min(buffer->lines[buffer->row].length, buffer->col);
+    if (buffer->cursor.x < buffer->lines[buffer->cursor.y].length) {
+        buffer->cursor.x++;
+    } else if (buffer->cursor.y + 1 < buffer->length) {
+        buffer->cursor.y++;
+        buffer->cursor.x = 0;
     }
 }
 
 /*
- * Move the cursor one character backward in the buffer
- * @param buffer *Buffer The buffer to move the cursor in
+ * Motion for moving to the previous character
+ * @param buffer *Buffer The buffer to do the motion in
  */
-void buffer_cursor_left(Buffer *buffer)
+void buffer_prev_char(Buffer *buffer)
 {
-    if (buffer->col > 0) {
-        buffer->col--;
-    } else if (buffer->row > 0) {
-        buffer->col = buffer->lines[--buffer->row].length;
+    if (buffer->cursor.x > 0) {
+        buffer->cursor.x--;
+    } else if (buffer->cursor.y > 0) {
+        buffer->cursor.x = buffer->lines[--buffer->cursor.y].length;
     }
 }
 
 /*
- * Move the cursor one character forward in the buffer
- * @param buffer *Buffer The buffer to move the cursor in
+ * Motion for moving to the start of the next word
+ * @param buffer *Buffer The buffer to do the motion in
  */
-void buffer_cursor_right(Buffer *buffer)
+void buffer_next_word(Buffer *buffer)
 {
-    if (buffer->col < buffer->lines[buffer->row].length) {
-        buffer->col++;
-    } else if (buffer->row < buffer->lines_count) {
-        buffer->row += 1;
-        buffer->col = 0;
+    String current = buffer->lines[buffer->cursor.y];
+
+    if (buffer->cursor.x == current.length &&
+        buffer->cursor.y + 1 < buffer->length) {
+        buffer->cursor.y++;
+        buffer->cursor.x = 0;
+    } else {
+        buffer->cursor.x = string_next_word(current, buffer->cursor.x);
     }
 }
 
 /*
- * Move the cursor to the top of the buffer
- * @param buffer *Buffer The buffer to move the cursor in
+ * Motion for moving to the end of the previous word
+ * @param buffer *Buffer The buffer to do the motion in
  */
-void buffer_cursor_top(Buffer *buffer)
+void buffer_prev_word(Buffer *buffer)
 {
-    buffer->row = buffer->col = 0;
+    buffer->cursor.x = (buffer->cursor.x == 0 && buffer->cursor.y > 0)
+        ? buffer->lines[--buffer->cursor.y].length
+        : string_prev_word(buffer->lines[buffer->cursor.y], buffer->cursor.x);
 }
 
 /*
- * Move the cursor to the bottom of the buffer
- * @param buffer *Buffer The buffer to move the cursor in
+ * Motion for moving to the next line
+ * @param buffer *Buffer The buffer to do the motion in
  */
-void buffer_cursor_bottom(Buffer *buffer)
+void buffer_next_line(Buffer *buffer)
 {
-    buffer->row = buffer->lines_count;
-    buffer->col = buffer->lines[buffer->row].length;
+    if (buffer->cursor.y + 1 < buffer->length)
+        buffer->cursor.y++;
+
+    buffer->cursor.x = min(buffer->cursor.x,
+                           buffer->lines[buffer->cursor.y].length);
 }
 
 /*
- * Move the cursor to the start of the line in the buffer
- * @param buffer *Buffer The buffer to move the cursor in
+ * Motion for moving to the previous line
+ * @param buffer *Buffer The buffer to do the motion in
  */
-void buffer_cursor_start(Buffer *buffer)
+void buffer_prev_line(Buffer *buffer)
 {
-    buffer->col = 0;
+    if (buffer->cursor.y > 0)
+        buffer->cursor.y--;
+
+    buffer->cursor.x = min(buffer->cursor.x,
+                           buffer->lines[buffer->cursor.y].length);
 }
 
 /*
- * Move the cursor to the end of the line in the buffer
- * @param buffer *Buffer The buffer to move the cursor in
+ * Motion for moving to the start of the current line
+ * @param buffer *Buffer The buffer to do the motion in
  */
-void buffer_cursor_end(Buffer *buffer)
+void buffer_head_line(Buffer *buffer)
 {
-    buffer->col = buffer->lines[buffer->row].length;
+    buffer->cursor.x = 0;
 }
 
 /*
- * Search for a pattern in a buffer
+ * Motion for moving to the end of the current line
+ * @param buffer *Buffer The buffer to do the motion in
+ */
+void buffer_tail_line(Buffer *buffer)
+{
+    buffer->cursor.x = buffer->lines[buffer->cursor.y].length;
+}
+
+/*
+ * Motion for moving to the start of the next paragraph
+ * @param buffer *Buffer The buffer to do the motion in
+ */
+void buffer_next_para(Buffer *buffer)
+{
+    size_t y = buffer->cursor.y;
+
+    // Go to the end of the current paragraph
+    while (buffer->lines[y].length != 0 && y + 1 < buffer->length) y++;
+
+    // Go to the start of the next paragraph
+    while (buffer->lines[y].length == 0 && y + 1 < buffer->length) y++;
+
+    buffer->cursor.y = y;
+    buffer->cursor.x = 0;
+}
+
+/*
+ * Motion for moving to the start of the previous paragraph
+ * @param buffer *Buffer The buffer to do the motion in
+ */
+void buffer_prev_para(Buffer *buffer)
+{
+    size_t y = buffer->cursor.y;
+
+    // Go to the start of the current paragraph
+    while (buffer->lines[y].length != 0 && y > 0) y--;
+
+    // Go to the end of the previous paragraph
+    while (buffer->lines[y].length == 0 && y > 0) y--;
+
+    buffer->cursor.y = y;
+    buffer->cursor.x = 0;
+}
+
+/*
+ * Motion for moving to the start of the file
+ * @param buffer *Buffer The buffer to do the motion in
+ */
+void buffer_head_file(Buffer *buffer)
+{
+    buffer->cursor.y = 0;
+    buffer->cursor.x = 0;
+}
+
+/*
+ * Motion for moving to the end of the file
+ * @param buffer *Buffer The buffer to do the motion in
+ */
+void buffer_tail_file(Buffer *buffer)
+{
+    buffer->cursor.y = buffer->length - 1;
+    buffer->cursor.x = buffer->lines[buffer->cursor.y].length;
+}
+
+/*
+ * Motion for moving to the next occurence of a term
+ * @param buffer *Buffer The buffer to do the motion in
+ * @param term String The term to search
+ * @return Vec2D The location of the previous term
+ */
+Vec2D buffer_next_term(Buffer *buffer, String term, Vec2D origin)
+{
+    Vec2D cursor = origin;
+    cursor.x++;
+
+    if (buffer_search_forward(buffer, term, &cursor, buffer->length))
+        return cursor;
+
+    cursor.y = 0;
+    cursor.x = 0;
+
+    if (buffer_search_forward(buffer, term, &cursor, origin.y))
+        return cursor;
+
+    return origin;
+}
+
+/*
+ * Motion for moving to the previous occurence of a term
+ * @param buffer *Buffer The buffer to do the motion in
+ * @param term String The term to search
+ * @return Vec2D The location of the previous term
+ */
+Vec2D buffer_prev_term(Buffer *buffer, String term, Vec2D origin)
+{
+    Vec2D cursor = origin;
+    if (cursor.x > 0) cursor.x--;
+
+    if (buffer_search_backward(buffer, term, &cursor, 0))
+        return cursor;
+
+    cursor.y = buffer->length - 1;
+    cursor.x = buffer->lines[cursor.y].length;
+
+    if (buffer_search_backward(buffer, term, &cursor, origin.y))
+        return cursor;
+
+    return origin;
+}
+
+/*
+ * Search for a term forward or backwards
  * @param buffer *Buffer The buffer to search the term in
- * @param pattern String The string to search in the buffer
- * @param forward bool Whether the direction is performed forward
- * @param wrap bool Whether searching wraps at the ends
- * @param ignorecase bool Whether the case is ignored while searching
- * @return bool Whether the search was successful or not
+ * @param term String The term to search
+ * @param origin Vec2D The origin to start searching from
+ * @param bool forward Whether the searching should be done forward
+ * @return Vec2D The location of the previous term
  */
-bool buffer_search(Buffer *buffer, String pattern, bool forward, bool wrap, bool ignorecase)
+Vec2D buffer_search_term(Buffer *buffer, String term, Vec2D origin, bool forward)
 {
-    bool searched = false;
-    int row = buffer->row;
-    int col = (forward) ? buffer->col + 1 : buffer->col - 1;
-
-    while (true) {
-        if ((col = string_search(buffer->lines[row], pattern, col, forward, ignorecase)) != -1) {
-            buffer->row = row;
-            buffer->col = col;
-            return true;
-        } else if (searched && row == (int) buffer->row) {
-            ERROR("pattern '" StringFmt "' not found", StringArg(pattern));
-            break;
-        }
-
-        searched = true;
-
-        if (forward) {
-            if (++row == (int) buffer->lines_count) {
-                if (wrap) {
-                    row = 0;
-                } else {
-                    break;
-                }
-            }
-            col = 0;
-        } else {
-            if (--row < 0) {
-                if (wrap) {
-                    row = buffer->lines_count - 1;
-                } else {
-                    break;
-                }
-            }
-            col = buffer->lines[row].length;
-        }
-    }
-
-    return false;
-}
-
-/*
- * Replace a pattern with a replacement in a buffer
- * @param buffer *Buffer The buffer to perform the replacements in
- * @param pattern String The pattern to replace
- * @param replacement String The replacement for the patter
- * @param ignorecase bool Whether the case is ignored while searching
- */
-void buffer_replace(Buffer *buffer, String pattern, String replacement, bool ignorecase)
-{
-    size_t orig_row = buffer->row;
-    size_t orig_col = buffer->col;
-
-    buffer->row = 0;
-    buffer->col = 0;
-
-    while (buffer_search(buffer, pattern, true, false, ignorecase)) {
-        string_delete(&buffer->lines[buffer->row], buffer->col, pattern.length);
-        string_insert(&buffer->lines[buffer->row], buffer->col,
-                      replacement.chars, replacement.length);
-    }
-
-    buffer->row = orig_row;
-    buffer->col = orig_col;
-}
-
-/*
- * Delete the character left of the cursor in a buffer
- * @param buffer *Buffer The buffer to delete in
- */
-void buffer_delete_left(Buffer *buffer)
-{
-    if (buffer->col > 0) {
-        string_delete(&buffer->lines[buffer->row], --buffer->col, 1);
-    } else if (buffer->row > 0) {
-        String current = buffer->lines[buffer->row];
-        buffer->col = buffer->lines[buffer->row - 1].length;
-
-        string_append(&buffer->lines[buffer->row - 1], current.chars, current.length);
-        string_free(&current);
-        buffer_delete(buffer, buffer->row--, 1);
+    if (term.length) {
+        return forward
+            ? buffer_next_term(buffer, term, origin)
+            : buffer_prev_term(buffer, term, origin);
+    } else {
+        return origin;
     }
 }
 
 /*
- * Delete the character right of the cursor in a buffer
- * @param buffer *Buffer The buffer to delete in
+ * Execute a motion and delete the characters encompassed by the motion
+ * @param buffer *Buffer The buffer to do the motion in
+ * @param motion void (*)(Buffer *) The motion to execute
  */
-void buffer_delete_right(Buffer *buffer)
+void buffer_delete_motion(Buffer *buffer, void (*motion)(Buffer *))
 {
-    if (buffer->col < buffer->lines[buffer->row].length) {
-        string_delete(&buffer->lines[buffer->row], buffer->col, 1);
-    } else if (buffer->lines_count > buffer->row) {
-        String next = buffer->lines[buffer->row + 1];
-        string_append(&buffer->lines[buffer->row], next.chars, next.length);
-        string_free(&next);
-        buffer_delete(buffer, buffer->row + 1, 1);
+    Vec2D head = buffer->cursor;
+    motion(buffer);
+    Vec2D tail = buffer->cursor;
+
+    // The head has to in a buffer position before the tail
+    // position. There are two situations that can arise.
+    //
+    // ----------------------------------------------------
+    // P1: The tail is above the head (irrespective of dx)
+    //
+    //   T
+    //
+    //          H
+    //
+    // ----------------------------------------------------
+    // P2: The tail is before the head in the same line
+    //
+    //   T      H
+    //
+    if (tail.y < head.y || (tail.y == head.y && tail.x < head.x)) {
+        Vec2D temp = head;
+        head = tail;
+        tail = temp;
     }
+
+    String *head_line = &buffer->lines[head.y];
+    String *tail_line = &buffer->lines[tail.y];
+
+    // Replace the characters after the head with the
+    // characters after the tail. This will create an effect
+    // of deleting the characters in between.
+    //
+    // ----------------------------------------------------
+    // P1: Deleting the same line
+    // 
+    //  +++++ H ===== T *****
+    //  ............
+    // 
+    // 
+    //  +++++ HT *****
+    //  ............
+    // 
+    //
+    // ----------------------------------------------------
+    // P2: Deleting across multiple lines
+    //
+    //  +++++ H =====
+    //  ===========
+    //  ================
+    //  === T *******
+    //  ............
+    // 
+    //
+    //  +++++ HT *******
+    //  ===========
+    //  ================
+    //  ............
+    // 
+    string_replace(head_line, head.x,
+                   tail_line->chars + tail.x,
+                   tail_line->length - tail.x);
+    head_line->length -= tail.x - head.x;
+
+    // Delete the lines which have to be removed completely.
+    //
+    // ----------------------------------------------------
+    // P1: The tail line is just below the head line.
+    //
+    //  +++++ H =====
+    //  === T *******
+    //  ..........
+    // 
+    //
+    // In the previous conjoining step, the buffer assumes a
+    // form like this.
+    //
+    //  +++++ HT *******
+    //  ===
+    //  ..........
+    //
+    //
+    // After this step the extra tail line is removed
+    //
+    //  +++++ HT *******
+    //  ..........
+    // 
+    // 
+    // ----------------------------------------------------
+    // P2: The tail line is way below the head line.
+    //
+    //  +++++ H =====
+    //  ===========
+    //  ================
+    //  === T *******
+    //  ..........
+    // 
+    //
+    // In the previous conjoining step, the buffer assumes a
+    // form like this.
+    //
+    //  +++++ HT *******
+    //  ===========
+    //  ================
+    //  ===
+    //  ..........
+    //
+    //
+    // After this step the extra tail line is removed
+    //
+    //  +++++ HT *******
+    //  ..........
+    // 
+    if (tail.y > head.y) {
+        for (size_t y = head.y + 1; y <= tail.y; ++y)
+            string_free(&buffer->lines[y]);
+
+        memmove(buffer->lines + head.y + 1,
+                buffer->lines + tail.y + 1,
+                sizeof(String) * (buffer->length - tail.y));
+
+        buffer->length -= tail.y - head.y;
+    }
+
+    buffer->cursor = head;
 }

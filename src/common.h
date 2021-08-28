@@ -3,11 +3,18 @@
 
 #define _GNU_SOURCE
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
 #include <ncurses.h>
+
+/*
+ * Some keycode ncurses doesn't define
+ */
+#define KEY_ESCAPE 27
+#define KEY_RETURN 10
 
 #define MINIMUM_CAPACITY 128
 
@@ -24,28 +31,13 @@
 /*
  * Assert a condition, quitting if false
  */
-#define ASSERTQ(condition, ...)                 \
+#define ASSERT(condition, ...)                  \
     if (!(condition)) {                         \
         fprintf(stderr, "error: ");             \
         fprintf(stderr, __VA_ARGS__);           \
         fprintf(stderr, "\n");                  \
         exit(1);                                \
     }
-
-/*
- * Assert a condition
- */
-#define ERROR(...)                              \
-    do {                                        \
-        move(LINES - 1, 0);                     \
-        char whitespace[COLS];                  \
-        memset(whitespace, ' ', COLS);          \
-        printw("%.*s", COLS, whitespace);       \
-        move(LINES - 1, 0);                     \
-        printw("error: ");                      \
-        printw(__VA_ARGS__);                    \
-        getch();                                \
-    } while (false);
 
 /*
  * Grow a capacity value incrementally
@@ -66,15 +58,15 @@
 #define SHIFT_ARRAY(array, index, count, type, length)  \
     memmove(array + index + count,                      \
             array + index,                              \
-            sizeof(type) * (length - index))
+            sizeof(type) * (length - (index)))
 
 /*
  * Shift the elements of an array backwards
  */
-#define BSHIFT_ARRAY(array, index, count, type, length) \
-    memmove(array + index,                              \
-            array + index + count,                      \
-            sizeof(type) * (length - index - count));   \
+#define BSHIFT_ARRAY(array, index, count, type, length)     \
+    memmove(array + index,                                  \
+            array + index + count,                          \
+            sizeof(type) * (length - (index) - (count)))
 
 /*
  * Get the minimum between two values
@@ -97,5 +89,16 @@ static inline int max(int a, int b)
 {
     return (a > b) ? a : b;
 }
+
+/*
+ * 2D vectors
+ */
+typedef struct {
+    size_t x;
+    size_t y;
+} Vec2D;
+
+#define Vec2DFmt "(%zu, %zu)"
+#define Vec2DArg(v) (v).x, (v).y
 
 #endif // COMMON_H
