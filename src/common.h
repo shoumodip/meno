@@ -98,7 +98,4 @@ typedef struct {
     size_t y;
 } Vec2D;
 
-#define Vec2DFmt "(%zu, %zu)"
-#define Vec2DArg(v) (v).x, (v).y
-
 #endif // COMMON_H
