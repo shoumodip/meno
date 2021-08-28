@@ -2,6 +2,7 @@
 #define EDITOR_H
 
 #include "buffer.h"
+#include "minibuffer.h"
 
 typedef struct {
     Vec2D size;

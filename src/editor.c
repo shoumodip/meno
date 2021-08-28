@@ -1,5 +1,4 @@
 #include "editor.h"
-#include "minibuffer.h"
 
 /*
  * Check if the virtual cursor position in the editor is correct
