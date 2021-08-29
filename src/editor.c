@@ -64,11 +64,110 @@ void editor_render_status(Editor *editor)
 
     move(editor->size.y, 0);
     if (length > COLS) {
-        printw("%.*s", COLS - 3, editor->status);
+        printw("%.*s", COLS, editor->status);
     } else {
         printw("%-*.*s", COLS - length, length, editor->status);
     }
     move(editor->cursor.y, editor->fringe + editor->cursor.x + 1);
+}
+
+typedef struct {
+    SyntaxType type;
+    size_t length;
+} SyntaxWord;
+
+bool is_word_separator(char ch)
+{
+    return !isalnum(ch) && ch != '_';
+}
+
+bool ends_with_separator(const char *line, size_t length, size_t end)
+{
+    return end == length ||
+        (end < length && is_word_separator(line[end]));
+}
+
+SyntaxWord syntax_match(Syntax syntax, const char *line, size_t length)
+{
+    if (memcmp(line, syntax.comment_line, strlen(syntax.comment_line)) == 0) {
+        return (SyntaxWord) {
+            .type = SYNTAX_COMMENT_LINE,
+            .length = length,
+        };
+    }
+
+    if (*line == '"') {
+        // It's a string
+        SyntaxWord string = {
+            .type = SYNTAX_STRING,
+            .length = length,
+        };
+
+        if (length > 1) {
+            char *end = memchr(line + 1, '"', length);
+            if (end && end - line < (long) length) string.length = end - line + 1;
+        }
+
+        return string;
+    }
+
+    size_t end;
+
+    end = dict_match(syntax.keywords, line, length);
+    if (end != 0 && ends_with_separator(line, length, end)) {
+        return (SyntaxWord) {
+            .type = SYNTAX_KEYWORD,
+            .length = end,
+        };
+    }
+
+    end = dict_match(syntax.types, line, length);
+    if (end != 0 && ends_with_separator(line, length, end)) {
+        return (SyntaxWord) {
+            .type = SYNTAX_TYPE,
+            .length = end,
+        };
+    }
+
+    end = dict_match(syntax.macros, line, length);
+    if (end != 0 && ends_with_separator(line, length, end)) {
+        return (SyntaxWord) {
+            .type = SYNTAX_MACRO,
+            .length = end,
+        };
+    }
+
+    return (SyntaxWord) {
+        .type = SYNTAX_NORMAL,
+        .length = 1,
+    };
+}
+
+SyntaxType editor_render_line(Editor *editor, String line)
+{
+    SyntaxWord word = {0};
+
+    for (size_t i = 0; i < line.length; i += word.length) {
+        if (i == 0 || is_word_separator(line.chars[i - 1])) {
+            word = syntax_match(editor->syntax, line.chars + i, line.length - i);
+        } else {
+            word = (SyntaxWord) {.type = SYNTAX_NORMAL, .length = 1};
+        }
+
+        if (i + word.length > editor->anchor.x && i - editor->anchor.x < editor->size.x) {
+            if (word.type == SYNTAX_KEYWORD)
+                attron(A_BOLD);
+
+            attron(COLOR_PAIR(word.type));
+            printw("%.*s", (int) word.length, line.chars + i);
+            attroff(COLOR_PAIR(word.type));
+
+            if (word.type == SYNTAX_KEYWORD)
+                attroff(A_BOLD);
+        }
+    }
+
+    return word.type;
 }
 
 /*
@@ -90,7 +189,9 @@ void editor_render_buffer(Editor *editor, bool status)
             line = editor->buffer->lines[i];
             size = min(editor->size.x, line.length - editor->anchor.x);
 
-            if (size > 0) printw(StringFmt, size, line.chars + editor->anchor.x);
+            // if (size > 0)
+                editor_render_line(editor, line);
+                // printw(StringFmt, size, line.chars + editor->anchor.x);
             if (size < (int) editor->size.x) addch('\n');
         }
 
@@ -103,14 +204,13 @@ void editor_render_buffer(Editor *editor, bool status)
 /*
  * Render a minibuffer in the status area
  * @param editor *Editor The editor to render the minibuffer in
- * @param minibuffer Minibuffer The minibuffer to render
  */
-void editor_render_minibuffer(Editor *editor, Minibuffer minibuffer)
+void editor_render_minibuffer(Editor *editor)
 {
     move(editor->size.y, 0);
-    printw("%s: %-*.*s", minibuffer.prompt,
-           editor->size.x + editor->fringe, StringArg(minibuffer.line));
-    move(editor->size.y, minibuffer.x + strlen(minibuffer.prompt) + 2);
+    printw("%s: %-*.*s", editor->minibuffer.prompt,
+           editor->size.x + editor->fringe, StringArg(editor->minibuffer.line));
+    move(editor->size.y, editor->minibuffer.x + strlen(editor->minibuffer.prompt) + 2);
 }
 
 /*
@@ -120,8 +220,8 @@ void editor_render_minibuffer(Editor *editor, Minibuffer minibuffer)
  */
 void editor_highlight_matched_term(Editor *editor, String term)
 {
-    Vec2D cursor = editor->buffer->cursor;
-    String line = editor->buffer->lines[cursor.y];
+    Vec2D cursor = editor->cursor;
+    String line = editor->buffer->lines[editor->buffer->cursor.y];
 
     if (strncasecmp(line.chars + cursor.x, term.chars, term.length) == 0) {
         attron(COLOR_PAIR(1));
@@ -142,48 +242,49 @@ void editor_highlight_matched_term(Editor *editor, String term)
  */
 void editor_search(Editor *editor, bool forward)
 {
-    Minibuffer search = {0};
+    Minibuffer *search = &editor->minibuffer;
     Vec2D origin = editor->buffer->cursor;
 
-    search.prompt = "Search";
+    search->line.length = 0;
+    search->prompt = "Search";
+    search->x = 0;
 
     int ch;
     while (true) {
         editor->buffer->cursor = buffer_search_term(editor->buffer,
-                                                    search.line,
+                                                    search->line,
                                                     origin,
                                                     forward);
         editor->update = true;
         editor_render_buffer(editor, false);
 
-        editor_highlight_matched_term(editor, search.line);
-        editor_render_minibuffer(editor, search);
+        editor_highlight_matched_term(editor, search->line);
+        editor_render_minibuffer(editor);
 
         ch = getch();
-        while (search.line.length != 0 && (ch == CTRL('r') || ch == CTRL('s'))) {
+        while (search->line.length != 0 && (ch == CTRL('r') || ch == CTRL('s'))) {
             editor->buffer->cursor = buffer_search_term(editor->buffer,
-                                                        search.line,
+                                                        search->line,
                                                         editor->buffer->cursor,
                                                         ch == CTRL('s'));
             editor->update = true;
             editor_render_buffer(editor, false);
 
-            editor_highlight_matched_term(editor, search.line);
-            editor_render_minibuffer(editor, search);
+            editor_highlight_matched_term(editor, search->line);
+            editor_render_minibuffer(editor);
 
             ch = getch();
         }
-                
-        if (!minibuffer_update(&search, ch))
+
+        if (!minibuffer_update(search, ch))
             break;
     }
 
-    if (search.line.length == 0) {
+    if (search->line.length == 0) {
         editor->buffer->cursor = origin;
-    } else {
-        string_free(&search.line);
     }
 
+    string_free(&search->line);
     editor->update = true;
 }
 
@@ -199,6 +300,7 @@ void editor_interact(Editor *editor)
     editor->cursor.x = 0;
     editor->cursor.y = 0;
 
+    string_grow(&editor->minibuffer.line, COLS);
     editor->status = malloc(COLS);
 
     int ch = 0;
@@ -208,6 +310,7 @@ void editor_interact(Editor *editor)
 
         switch (ch) {
         case CTRL('q'):
+            string_free(&editor->minibuffer.line);
             free(editor->status);
             return;
 
@@ -307,7 +410,7 @@ void editor_interact(Editor *editor)
             break;
 
         default:
-            if (isprint(ch)) {
+            if (isprint(ch) || ch == '\n') {
                 buffer_insert_char(editor->buffer, ch);
                 editor_update_lines(editor);
             }

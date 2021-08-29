@@ -3,6 +3,7 @@
 
 #include "buffer.h"
 #include "minibuffer.h"
+#include "syntax.h"
 
 typedef struct {
     Vec2D size;
@@ -14,7 +15,10 @@ typedef struct {
     bool update;
     Buffer *buffer;
 
+    Minibuffer minibuffer;
     char *status;
+
+    Syntax syntax;
 } Editor;
 
 bool editor_cursor_correct(Editor *editor);
@@ -24,7 +28,7 @@ void editor_update_lines(Editor *editor);
 
 void editor_render_status(Editor *editor);
 void editor_render_buffer(Editor *editor, bool status);
-void editor_render_minibuffer(Editor *editor, Minibuffer minibuffer);
+void editor_render_minibuffer(Editor *editor);
 void editor_highlight_matched_term(Editor *editor, String term);
 void editor_search(Editor *editor, bool forward);
 void editor_interact(Editor *editor);
