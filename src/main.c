@@ -3,7 +3,7 @@
 // C-syntax for testing
 void c_syntax(Syntax *syntax)
 {
-    syntax->separators = "()[]{}!@#$%^&*-=+\\|;:,.? ";
+    syntax->separators = "()[]{}!@#$%^&*-=+\\|;:,.?<> ";
 
     word_list_push(&syntax->types, "int");
     word_list_push(&syntax->types, "void");
@@ -41,7 +41,6 @@ void c_syntax(Syntax *syntax)
 
     pair_list_push(&syntax->string, "\"", "\"");
     pair_list_push(&syntax->string, "'", "'");
-    pair_list_push(&syntax->string, "<", ">");
     pair_list_push(&syntax->comments, "/*", "*/");
 }
 

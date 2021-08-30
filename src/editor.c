@@ -1,7 +1,18 @@
 #include "editor.h"
 
 /*
- * Check if the virtual cursor position in the editor is correct
+ * Check whether the virtual cursor is inside the screen
+ * @param editor *Editor The editor to check the cursor in
+ * @return bool Whether the virtual cursor is inside the screen
+ */
+bool editor_cursor_inscreen(Editor *editor)
+{
+    return editor->cursor.x < editor->size.x &&
+        editor->cursor.y < editor->size.y;
+}
+
+/*
+ * Check if the virtual cursor in the editor is correct
  * @param Editor *editor The editor to check the cursor in
  * @return bool Whether the virtual cursor is correct
  */
@@ -9,8 +20,7 @@ bool editor_cursor_correct(Editor *editor)
 {
     return editor->anchor.x + editor->cursor.x == editor->buffer->cursor.x &&
         editor->anchor.y + editor->cursor.y == editor->buffer->cursor.y &&
-        editor->cursor.x < editor->size.x &&
-        editor->cursor.y < editor->size.y;
+        editor_cursor_inscreen(editor);
 }
 
 /*
@@ -20,12 +30,13 @@ bool editor_cursor_correct(Editor *editor)
  */
 bool editor_revert_cursor(Editor *editor)
 {
-    if (!editor_cursor_correct(editor)) {
+    if (editor_update_size(editor)) return editor_cursor_inscreen(editor);
+
+    if (editor_update_size(editor) || !editor_cursor_correct(editor)) {
         editor->cursor.y = editor->buffer->cursor.y % editor->size.y;
         editor->cursor.x = editor->buffer->cursor.x % editor->size.x;
         editor->anchor.y = editor->buffer->cursor.y - editor->cursor.y;
         editor->anchor.x = editor->buffer->cursor.x - editor->cursor.x;
-        return true;
     }
     return false;
 }
@@ -50,6 +61,23 @@ void editor_update_lines(Editor *editor)
     editor->update = true;
 }
 
+/*
+ * Update the size of the editor to the terminal window
+ * @param editor *Editor The editor to update the size in
+ * @return bool Whether the update was required
+ */
+bool editor_update_size(Editor *editor)
+{
+    Vec2D original = {
+        .x = editor->size.x,
+        .y = editor->size.y
+    };
+
+    editor_update_lines(editor);
+    editor->size.y = LINES - 1;
+
+    return original.x != editor->size.x || original.y != editor->size.y;
+}
 
 /*
  * Render the status line of the editor
@@ -88,24 +116,31 @@ void editor_render_fringe(Editor *editor, size_t line)
 /*
  * Print a token
  * @param editor *Editor The editor in which to render the token
- * @param col size_t The column of the token
+ * @param index Vec2D The starting position of the token
  * @param string String The source of the token
  * @param token Token The token
  */
-void editor_print_token(Editor *editor, size_t col, String string, Token token)
+void editor_print_token(Editor *editor, Vec2D position, String string, Token token)
 {
-    attron(COLOR_PAIR(token.type));
-    if (token.type == TOKEN_KEYWORD) {
-        attron(A_BOLD);
-    } else {
-        attroff(A_BOLD);
+    size_t ex = min(editor->anchor.x + editor->size.x, string.length);
+    size_t ey = min(editor->anchor.y + editor->size.y, editor->buffer->length);
+
+    if (position.x >= editor->anchor.x && position.x < ex &&
+        position.y >= editor->anchor.y && position.y < ey) {
+
+        attron(COLOR_PAIR(token.type));
+        if (token.type == TOKEN_KEYWORD) {
+            attron(A_BOLD);
+        } else {
+            attroff(A_BOLD);
+        }
+
+        printw("%.*s",
+               min(token.length, editor->anchor.x + editor->size.x - position.x),
+               string.chars + position.x);
+
+        attroff(COLOR_PAIR(token.type));
     }
-
-    printw("%.*s",
-           min(token.length, editor->size.x - col % editor->size.x),
-           string.chars + col);
-
-    attroff(COLOR_PAIR(token.type));
 }
 
 /*
@@ -120,23 +155,27 @@ bool editor_render_token(Editor *editor, size_t end, Vec2D *head)
     String line = editor->buffer->lines[head->y];
     Token token = syntax_get_token(editor->syntax, line, head->x);
 
-    if (head->x == editor->anchor.x)
+    if (head->x == 0 && head->y >= editor->anchor.y)
         editor_render_fringe(editor, head->y);
 
-    editor_print_token(editor, head->x, line, token);
+    editor_print_token(editor, *head, line, token);
     head->x += token.length;
 
     if (head->x == line.length && ++head->y < end) {
-        if (token.length < editor->size.x) addch('\n');
-        head->x = editor->anchor.x;
+        if (head->y > editor->anchor.y &&
+            (line.length < editor->size.x ||
+             head->x - editor->anchor.x < editor->size.x)) {
+            addch('\n');
+        }
+        head->x = 0;
     }
 
     while (token.pair != -1 && head->y < end) {
-        editor_render_fringe(editor, head->y);
+        if (head->y >= editor->anchor.y) editor_render_fringe(editor, head->y);
 
         line = editor->buffer->lines[head->y];
         if (syntax_end_token(editor->syntax, line, &token)) token.pair = -1;
-        editor_print_token(editor, head->x, line, token);
+        editor_print_token(editor, *head, line, token);
 
         if (token.pair == -1) {
             head->x = token.length;
@@ -145,7 +184,11 @@ bool editor_render_token(Editor *editor, size_t end, Vec2D *head)
             head->y++;
         }
 
-        if (token.length < editor->size.x) addch('\n');
+        if (head->y > editor->anchor.y &&
+            (line.length < editor->size.x ||
+             head->x + token.length - editor->anchor.x < editor->size.x)) {
+            addch('\n');
+        }
     }
 
     return head->y < end;
@@ -161,10 +204,10 @@ void editor_render_buffer(Editor *editor, bool status)
     if (editor_revert_cursor(editor) || editor->update) {
         clear();
 
-        Vec2D head = editor->anchor;
+        Vec2D head = {0};
+
         size_t end = min(editor->buffer->length, editor->anchor.y + editor->size.y);
-        while (editor_render_token(editor, end, &head)) // addch('~')
-                                                            ;
+        while (editor_render_token(editor, end, &head));
 
         editor->update = false;
     }
@@ -265,8 +308,7 @@ void editor_search(Editor *editor, bool forward)
  */
 void editor_interact(Editor *editor)
 {
-    editor_update_lines(editor);
-    editor->size.y = LINES - 1;
+    editor_update_size(editor);
 
     editor->cursor.x = 0;
     editor->cursor.y = 0;
