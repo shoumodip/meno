@@ -458,14 +458,14 @@ void buffer_delete_motion(Buffer *buffer, void (*motion)(Buffer *))
     //
     // ----------------------------------------------------
     // P1: Deleting the same line
-    // 
+    //
     //  +++++ H ===== T *****
     //  ............
-    // 
-    // 
+    //
+    //
     //  +++++ HT *****
     //  ............
-    // 
+    //
     //
     // ----------------------------------------------------
     // P2: Deleting across multiple lines
@@ -475,13 +475,13 @@ void buffer_delete_motion(Buffer *buffer, void (*motion)(Buffer *))
     //  ================
     //  === T *******
     //  ............
-    // 
+    //
     //
     //  +++++ HT *******
     //  ===========
     //  ================
     //  ............
-    // 
+    //
     string_replace(head_line, head.x,
                    tail_line->chars + tail.x,
                    tail_line->length - tail.x);
@@ -495,7 +495,7 @@ void buffer_delete_motion(Buffer *buffer, void (*motion)(Buffer *))
     //  +++++ H =====
     //  === T *******
     //  ..........
-    // 
+    //
     //
     // In the previous conjoining step, the buffer assumes a
     // form like this.
@@ -509,8 +509,8 @@ void buffer_delete_motion(Buffer *buffer, void (*motion)(Buffer *))
     //
     //  +++++ HT *******
     //  ..........
-    // 
-    // 
+    //
+    //
     // ----------------------------------------------------
     // P2: The tail line is way below the head line.
     //
@@ -519,7 +519,7 @@ void buffer_delete_motion(Buffer *buffer, void (*motion)(Buffer *))
     //  ================
     //  === T *******
     //  ..........
-    // 
+    //
     //
     // In the previous conjoining step, the buffer assumes a
     // form like this.
@@ -535,7 +535,7 @@ void buffer_delete_motion(Buffer *buffer, void (*motion)(Buffer *))
     //
     //  +++++ HT *******
     //  ..........
-    // 
+    //
     if (tail.y > head.y) {
         for (size_t y = head.y + 1; y <= tail.y; ++y)
             string_free(&buffer->lines[y]);

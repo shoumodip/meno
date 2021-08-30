@@ -119,7 +119,7 @@ bool minibuffer_update(Minibuffer *minibuffer, int ch)
     case CTRL('d'):
         minibuffer_delete_motion(minibuffer, &minibuffer_next_char);
         break;
-            
+
     case KEY_BACKSPACE:
     case CTRL('k'):
         minibuffer_delete_motion(minibuffer, &minibuffer_prev_char);

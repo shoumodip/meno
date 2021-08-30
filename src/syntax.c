@@ -230,7 +230,7 @@ Token syntax_get_token(Syntax syntax, String line, size_t start)
 
     token = syntax_match_word_token(syntax, syntax.keywords, line, start, TOKEN_KEYWORD);
     if (token.length) return token;
-    
+
     token = syntax_match_word_token(syntax, syntax.macros, line, start, TOKEN_MACRO);
     if (token.length) return token;
 
