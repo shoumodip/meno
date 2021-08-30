@@ -485,7 +485,7 @@ void buffer_delete_motion(Buffer *buffer, void (*motion)(Buffer *))
     string_replace(head_line, head.x,
                    tail_line->chars + tail.x,
                    tail_line->length - tail.x);
-    head_line->length -= tail.x - head.x;
+    head_line->length = head.x + tail_line->length - tail.x;
 
     // Delete the lines which have to be removed completely.
     //

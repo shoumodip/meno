@@ -1,5 +1,5 @@
 * Text Editor
-[[./demo-alpha2.png]]
+[[./demo-alpha3.png]]
 
 A WIP text editor in C.
 

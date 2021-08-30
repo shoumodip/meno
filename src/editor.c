@@ -46,7 +46,7 @@ size_t editor_fringe_size(Editor *editor)
 void editor_update_lines(Editor *editor)
 {
     editor->fringe = editor_fringe_size(editor);
-    editor->size.x = COLS - editor->fringe;
+    editor->size.x = COLS - editor->fringe - 1;
     editor->update = true;
 }
 
@@ -63,111 +63,92 @@ void editor_render_status(Editor *editor)
                           editor->buffer->cursor.x);
 
     move(editor->size.y, 0);
+    attron(COLOR_PAIR(UI_STATUS));
     if (length > COLS) {
         printw("%.*s", COLS, editor->status);
     } else {
-        printw("%-*.*s", COLS - length, length, editor->status);
+        printw("%-*.*s", COLS, length, editor->status);
     }
+    attroff(COLOR_PAIR(UI_STATUS));
     move(editor->cursor.y, editor->fringe + editor->cursor.x + 1);
 }
 
-typedef struct {
-    SyntaxType type;
-    size_t length;
-} SyntaxWord;
-
-bool is_word_separator(char ch)
+/*
+ * Render the fringe for a particular line in the editor
+ * @param editor *Editor The editor in which to draw the fringe
+ * @param line size_t The line number to draw
+ */
+void editor_render_fringe(Editor *editor, size_t line)
 {
-    return !isalnum(ch) && ch != '_';
+    attron(COLOR_PAIR(UI_LINE_NUMBERS));
+    printw("%*zu ", editor->fringe, line + 1);
+    attroff(COLOR_PAIR(UI_LINE_NUMBERS));
 }
 
-bool ends_with_separator(const char *line, size_t length, size_t end)
+/*
+ * Print a token
+ * @param editor *Editor The editor in which to render the token
+ * @param col size_t The column of the token
+ * @param string String The source of the token
+ * @param token Token The token
+ */
+void editor_print_token(Editor *editor, size_t col, String string, Token token)
 {
-    return end == length ||
-        (end < length && is_word_separator(line[end]));
+    attron(COLOR_PAIR(token.type));
+    if (token.type == TOKEN_KEYWORD) {
+        attron(A_BOLD);
+    } else {
+        attroff(A_BOLD);
+    }
+
+    printw("%.*s",
+           min(token.length, editor->size.x - col % editor->size.x),
+           string.chars + col);
+
+    attroff(COLOR_PAIR(token.type));
 }
 
-SyntaxWord syntax_match(Syntax syntax, const char *line, size_t length)
+/*
+ * Render a token
+ * @param editor *Editor The editor in which to render the token
+ * @param end size_t The ending ordinate
+ * @param head *Vec2D The head of the rendering process
+ * @param bool Whether the rendering can be continued
+ */
+bool editor_render_token(Editor *editor, size_t end, Vec2D *head)
 {
-    if (memcmp(line, syntax.comment_line, strlen(syntax.comment_line)) == 0) {
-        return (SyntaxWord) {
-            .type = SYNTAX_COMMENT_LINE,
-            .length = length,
-        };
+    String line = editor->buffer->lines[head->y];
+    Token token = syntax_get_token(editor->syntax, line, head->x);
+
+    if (head->x == editor->anchor.x)
+        editor_render_fringe(editor, head->y);
+
+    editor_print_token(editor, head->x, line, token);
+    head->x += token.length;
+
+    if (head->x == line.length && ++head->y < end) {
+        if (token.length < editor->size.x) addch('\n');
+        head->x = editor->anchor.x;
     }
 
-    if (*line == '"') {
-        // It's a string
-        SyntaxWord string = {
-            .type = SYNTAX_STRING,
-            .length = length,
-        };
+    while (token.pair != -1 && head->y < end) {
+        editor_render_fringe(editor, head->y);
 
-        if (length > 1) {
-            char *end = memchr(line + 1, '"', length);
-            if (end && end - line < (long) length) string.length = end - line + 1;
-        }
+        line = editor->buffer->lines[head->y];
+        if (syntax_end_token(editor->syntax, line, &token)) token.pair = -1;
+        editor_print_token(editor, head->x, line, token);
 
-        return string;
-    }
-
-    size_t end;
-
-    end = dict_match(syntax.keywords, line, length);
-    if (end != 0 && ends_with_separator(line, length, end)) {
-        return (SyntaxWord) {
-            .type = SYNTAX_KEYWORD,
-            .length = end,
-        };
-    }
-
-    end = dict_match(syntax.types, line, length);
-    if (end != 0 && ends_with_separator(line, length, end)) {
-        return (SyntaxWord) {
-            .type = SYNTAX_TYPE,
-            .length = end,
-        };
-    }
-
-    end = dict_match(syntax.macros, line, length);
-    if (end != 0 && ends_with_separator(line, length, end)) {
-        return (SyntaxWord) {
-            .type = SYNTAX_MACRO,
-            .length = end,
-        };
-    }
-
-    return (SyntaxWord) {
-        .type = SYNTAX_NORMAL,
-        .length = 1,
-    };
-}
-
-SyntaxType editor_render_line(Editor *editor, String line)
-{
-    SyntaxWord word = {0};
-
-    for (size_t i = 0; i < line.length; i += word.length) {
-        if (i == 0 || is_word_separator(line.chars[i - 1])) {
-            word = syntax_match(editor->syntax, line.chars + i, line.length - i);
+        if (token.pair == -1) {
+            head->x = token.length;
+            return true;
         } else {
-            word = (SyntaxWord) {.type = SYNTAX_NORMAL, .length = 1};
+            head->y++;
         }
 
-        if (i + word.length > editor->anchor.x && i - editor->anchor.x < editor->size.x) {
-            if (word.type == SYNTAX_KEYWORD)
-                attron(A_BOLD);
-
-            attron(COLOR_PAIR(word.type));
-            printw("%.*s", (int) word.length, line.chars + i);
-            attroff(COLOR_PAIR(word.type));
-
-            if (word.type == SYNTAX_KEYWORD)
-                attroff(A_BOLD);
-        }
+        if (token.length < editor->size.x) addch('\n');
     }
 
-    return word.type;
+    return head->y < end;
 }
 
 /*
@@ -180,20 +161,10 @@ void editor_render_buffer(Editor *editor, bool status)
     if (editor_revert_cursor(editor) || editor->update) {
         clear();
 
-        int size;
-        String line;
-        size_t last = min(editor->buffer->length, editor->anchor.y + editor->size.y);
-        for (size_t i = editor->anchor.y; i < last; ++i) {
-            printw("%*zu ", editor->fringe, i + 1);
-
-            line = editor->buffer->lines[i];
-            size = min(editor->size.x, line.length - editor->anchor.x);
-
-            // if (size > 0)
-                editor_render_line(editor, line);
-                // printw(StringFmt, size, line.chars + editor->anchor.x);
-            if (size < (int) editor->size.x) addch('\n');
-        }
+        Vec2D head = editor->anchor;
+        size_t end = min(editor->buffer->length, editor->anchor.y + editor->size.y);
+        while (editor_render_token(editor, end, &head)) // addch('~')
+                                                            ;
 
         editor->update = false;
     }
@@ -202,15 +173,16 @@ void editor_render_buffer(Editor *editor, bool status)
 }
 
 /*
- * Render a minibuffer in the status area
+ * Render the minibuffer in the status area
  * @param editor *Editor The editor to render the minibuffer in
  */
 void editor_render_minibuffer(Editor *editor)
 {
     move(editor->size.y, 0);
-    printw("%s: %-*.*s", editor->minibuffer.prompt,
-           editor->size.x + editor->fringe, StringArg(editor->minibuffer.line));
-    move(editor->size.y, editor->minibuffer.x + strlen(editor->minibuffer.prompt) + 2);
+    attron(COLOR_PAIR(UI_STATUS));
+    printw("%-*.*s", editor->size.x + editor->fringe, StringArg(editor->minibuffer.line));
+    attroff(COLOR_PAIR(UI_STATUS));
+    move(editor->size.y, editor->minibuffer.x);
 }
 
 /*
@@ -224,13 +196,13 @@ void editor_highlight_matched_term(Editor *editor, String term)
     String line = editor->buffer->lines[editor->buffer->cursor.y];
 
     if (strncasecmp(line.chars + cursor.x, term.chars, term.length) == 0) {
-        attron(COLOR_PAIR(1));
+        attron(COLOR_PAIR(UI_SEARCH));
         attron(A_BOLD);
 
         move(cursor.y, cursor.x + editor->fringe + 1);
         printw("%.*s", (int) term.length, line.chars + cursor.x);
 
-        attroff(COLOR_PAIR(1));
+        attroff(COLOR_PAIR(UI_SEARCH));
         attroff(A_BOLD);
     }
 }
@@ -246,7 +218,6 @@ void editor_search(Editor *editor, bool forward)
     Vec2D origin = editor->buffer->cursor;
 
     search->line.length = 0;
-    search->prompt = "Search";
     search->x = 0;
 
     int ch;

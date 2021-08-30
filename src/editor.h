@@ -27,6 +27,9 @@ size_t editor_fringe_size(Editor *editor);
 void editor_update_lines(Editor *editor);
 
 void editor_render_status(Editor *editor);
+void editor_render_fringe(Editor *editor, size_t line);
+void editor_print_token(Editor *editor, size_t col, String string, Token token);
+bool editor_render_token(Editor *editor, size_t end, Vec2D *head);
 void editor_render_buffer(Editor *editor, bool status);
 void editor_render_minibuffer(Editor *editor);
 void editor_highlight_matched_term(Editor *editor, String term);

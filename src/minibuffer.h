@@ -4,7 +4,6 @@
 #include "string.h"
 
 typedef struct {
-    const char *prompt;
     String line;
     size_t x;
 } Minibuffer;
