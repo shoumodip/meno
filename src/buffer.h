@@ -40,9 +40,9 @@ void buffer_prev_para(Buffer *buffer);
 void buffer_head_file(Buffer *buffer);
 void buffer_tail_file(Buffer *buffer);
 
-Vec2D buffer_next_term(Buffer *buffer, String term, Vec2D origin);
-Vec2D buffer_prev_term(Buffer *buffer, String term, Vec2D origin);
-Vec2D buffer_search_term(Buffer *buffer, String term, Vec2D origin, bool forward);
+bool buffer_next_term(Buffer *buffer, String term, Vec2D origin);
+bool buffer_prev_term(Buffer *buffer, String term, Vec2D origin);
+bool buffer_search_term(Buffer *buffer, String term, Vec2D origin, bool forward);
 
 void buffer_delete_motion(Buffer *buffer, void (*motion)(Buffer *));
 

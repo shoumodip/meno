@@ -16,7 +16,9 @@
 #define KEY_ESCAPE 27
 #define KEY_RETURN 10
 
-// Temporary color definitions before the settings system is created
+/*
+ * Temporary color definitions before the settings system is created
+ */
 #define UI_SEARCH 10
 #define UI_LINE_NUMBERS 11
 #define UI_STATUS 12
@@ -93,6 +95,17 @@ static inline int min(int a, int b)
 static inline int max(int a, int b)
 {
     return (a > b) ? a : b;
+}
+
+/*
+ * Get the difference between two values
+ * @param a int The first value
+ * @param b int The second value
+ * @return size_t The difference
+ */
+static inline size_t diff(int a, int b)
+{
+    return (a > b) ? a - b : b - a;
 }
 
 /*

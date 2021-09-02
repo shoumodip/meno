@@ -172,8 +172,10 @@ void buffer_insert_line(Buffer *buffer, size_t index, String line)
 void buffer_delete_line(Buffer *buffer, size_t index)
 {
     // Shift back the elements in the buffer
-    if (buffer->cursor.y < buffer->length)
+    if (buffer->cursor.y < buffer->length) {
+        string_free(&buffer->lines[index]);
         BSHIFT_ARRAY(buffer->lines, index, 1, String, buffer->length--);
+    }
 }
 
 /*
@@ -191,6 +193,7 @@ void buffer_insert_char(Buffer *buffer, char ch)
 
         buffer_insert_line(buffer, ++buffer->cursor.y, after);
         buffer->cursor.x = 0;
+        
     } else {
         // Insert the character into the buffer if it is printable
         string_insert(&buffer->lines[buffer->cursor.y], buffer->cursor.x++, &ch, 1);
@@ -356,46 +359,50 @@ void buffer_tail_file(Buffer *buffer)
  * Motion for moving to the next occurence of a term
  * @param buffer *Buffer The buffer to do the motion in
  * @param term String The term to search
- * @return Vec2D The location of the previous term
+ * @return bool Whether the searching was possible
  */
-Vec2D buffer_next_term(Buffer *buffer, String term, Vec2D origin)
+bool buffer_next_term(Buffer *buffer, String term, Vec2D origin)
 {
-    Vec2D cursor = origin;
-    cursor.x++;
+    buffer->cursor = origin;
+    buffer->cursor.x++;
 
-    if (buffer_search_forward(buffer, term, &cursor, buffer->length))
-        return cursor;
+    if (buffer_search_forward(buffer, term, &buffer->cursor, buffer->length))
+        return true;
 
-    cursor.y = 0;
-    cursor.x = 0;
+    buffer->cursor.y = 0;
+    buffer->cursor.x = 0;
 
-    if (buffer_search_forward(buffer, term, &cursor, origin.y))
-        return cursor;
+    if (buffer_search_forward(buffer, term, &buffer->cursor, origin.y))
+        return true;
 
-    return origin;
+    buffer->cursor = origin;
+    return false;
 }
 
 /*
  * Motion for moving to the previous occurence of a term
  * @param buffer *Buffer The buffer to do the motion in
  * @param term String The term to search
- * @return Vec2D The location of the previous term
+ * @return bool Whether the searching was possible
  */
-Vec2D buffer_prev_term(Buffer *buffer, String term, Vec2D origin)
+bool buffer_prev_term(Buffer *buffer, String term, Vec2D origin)
 {
-    Vec2D cursor = origin;
-    if (cursor.x > 0) cursor.x--;
+    buffer->cursor = origin;
+    if (buffer->cursor.x > 0) {
+        buffer->cursor.x--;
+    } else if (buffer->cursor.y > 0) {
+        buffer->cursor.y--;
+    }
 
-    if (buffer_search_backward(buffer, term, &cursor, 0))
-        return cursor;
+    if (buffer_search_backward(buffer, term, &buffer->cursor, 0)) return true;
 
-    cursor.y = buffer->length - 1;
-    cursor.x = buffer->lines[cursor.y].length;
+    buffer->cursor.y = buffer->length - 1;
+    buffer->cursor.x = buffer->lines[buffer->cursor.y].length;
 
-    if (buffer_search_backward(buffer, term, &cursor, origin.y))
-        return cursor;
+    if (buffer_search_backward(buffer, term, &buffer->cursor, origin.y)) return true;
 
-    return origin;
+    buffer->cursor = origin;
+    return false;
 }
 
 /*
@@ -404,17 +411,14 @@ Vec2D buffer_prev_term(Buffer *buffer, String term, Vec2D origin)
  * @param term String The term to search
  * @param origin Vec2D The origin to start searching from
  * @param bool forward Whether the searching should be done forward
- * @return Vec2D The location of the previous term
+ * @return bool Whether the searching was possible
  */
-Vec2D buffer_search_term(Buffer *buffer, String term, Vec2D origin, bool forward)
+bool buffer_search_term(Buffer *buffer, String term, Vec2D origin, bool forward)
 {
-    if (term.length) {
-        return forward
-            ? buffer_next_term(buffer, term, origin)
-            : buffer_prev_term(buffer, term, origin);
-    } else {
-        return origin;
-    }
+    if (term.length == 0) return true;
+    return forward
+        ? buffer_next_term(buffer, term, origin)
+        : buffer_prev_term(buffer, term, origin);
 }
 
 /*

@@ -23,13 +23,11 @@ void word_list_free(WordList *list)
  */
 void word_list_push(WordList *list, char *word)
 {
-    // Grow the listionary if required
     if (list->length >= list->capacity) {
         list->capacity = GROW_CAPACITY(list->capacity);
         list->words = GROW_ARRAY(list->words, char*, list->capacity);
     }
 
-    // Push the word onto the listionary
     list->words[list->length++] = word_from_cstr(word);
 }
 
@@ -44,6 +42,28 @@ Word word_from_cstr(const char *word)
         .chars = strdup(word),
         .length = strlen(word)
     };
+}
+
+/*
+ * Match an atom from a word list
+ * @param list WordList The word list to match against
+ * @param source *char The source to match against
+ * @param atom *SyntaxAtom The atom to write the information into
+ * @param type SyntaxType The atom type
+ * @param bool Whether it was successful
+ */
+bool word_list_match_atom(WordList list, const char *source, SyntaxAtom *atom, SyntaxType type)
+{
+    for (size_t i = 0; i < list.length; ++i) {
+        Word word = list.words[i];
+
+        if (word.length == atom->length &&
+            memcmp(source, word.chars, word.length) == 0) {
+            atom->type = type;
+            return true;
+        }
+    }
+    return false;
 }
 
 /*
@@ -72,13 +92,11 @@ void pair_list_free(PairList *list)
  */
 void pair_list_push(PairList *list, char *first, char *second)
 {
-    // Grow the listionary if required
     if (list->length >= list->capacity) {
         list->capacity = GROW_CAPACITY(list->capacity);
         list->pairs = GROW_ARRAY(list->pairs, Pair, list->capacity);
     }
 
-    // Push the pair onto the listionary
     list->pairs[list->length++] = (Pair) {
         .words = {
             word_from_cstr(first),
@@ -95,7 +113,7 @@ void pair_list_push(PairList *list, char *first, char *second)
  * @param element size_t Which index of the pairs to match against
  * @return int The index of the matching pair and -1 if not found
  */
-int pair_list_find(PairList list, String line, size_t start, size_t element)
+int pair_list_find_element(PairList list, String line, size_t start, size_t element)
 {
     for (size_t i = 0; i < list.length; ++i) {
         Word word = list.pairs[i].words[element];
@@ -111,43 +129,95 @@ int pair_list_find(PairList list, String line, size_t start, size_t element)
 }
 
 /*
+ * Find the end of pair in a line
+ * @param pair Pair The pair to end
+ * @param line String The line to find the end in
+ * @param start size_t The index to start searching from
+ * @param offset size_t The offset at the beginning
+ * @return int The index of end of the pair or -1 if not found
+ */
+int pair_list_find_end(Pair pair, String line, size_t start, size_t offset)
+{
+    Word end = pair.words[1];
+
+    if (line.length >= end.length) {
+        for (size_t i = start + offset; i <= line.length - end.length; ++i) {
+            if (line.chars[i] == '\\') {
+                i++;
+                continue;
+            }
+
+            if (memcmp(end.chars, line.chars + i, end.length) == 0) {
+                return i - start + end.length;
+            }
+        }
+    }
+
+    return -1;
+}
+
+/*
+ * Free a syntax cache
+ * @param cache *SyntaxCache The syntax cache to free
+ */
+void syntax_cache_free(SyntaxCache *cache)
+{
+    if (cache->anchors) free(cache->anchors);
+    cache->length = cache->capacity = 0;
+}
+
+/*
+ * Grow a syntax cache to a particular capacity
+ * @param cache *SyntaxCache The syntax cache
+ * @param capacity size_t The capacity to grow the cache to
+ */
+void syntax_cache_grow(SyntaxCache *cache, size_t capacity)
+{
+    if (capacity > cache->capacity) {
+        cache->capacity = max(capacity, GROW_CAPACITY(cache->capacity));
+        cache->anchors = GROW_ARRAY(cache->anchors, SyntaxAnchor, cache->capacity);
+    }
+}
+
+/*
+ * Free the allocated memory in a syntax context
+ * @param context *SyntaxContext The syntax context to free
+ */
+void syntax_context_free(SyntaxContext *context)
+{
+    if (context->identifier) free(context->identifier);
+
+    word_list_free(&context->types);
+    word_list_free(&context->keywords);
+    word_list_free(&context->macros);
+    word_list_free(&context->comment);
+
+    pair_list_free(&context->string);
+    pair_list_free(&context->comments);
+}
+
+/*
  * Check if a character is a separator
- * @param syntax Syntax The syntax definition to use
+ * @param syntax SyntaxContext The syntax context to use
  * @param ch char The character to check
  * @return bool Whether the character is a separator
  */
-bool syntax_match_separator(Syntax syntax, char ch)
+bool syntax_match_identifier(SyntaxContext context, char ch)
 {
-    return strchr(syntax.separators, ch) != NULL;
+    return isalnum(ch) || strchr(context.identifier, ch) != NULL;
 }
 
 /*
- * Check if a token ends with a separator
- * @param syntax Syntax The syntax definition to use
- * @param line String The line in which the token is present
- * @param end size_t The end of the token
- * @return bool Whether the token ends with a separator
- */
-bool syntax_ends_with_separator(Syntax syntax, String line, size_t end)
-{
-    return end == line.length ||
-        (end < line.length &&
-         syntax_match_separator(syntax, line.chars[end]));
-}
-
-/*
- * Try to match an index of a line with some token from a word list
- * @param syntax Syntax The syntax definition to use
+ * Try to match an index of a line with an atom from a word list
  * @param list WordList The word list
  * @param line String The line
  * @param start size_t The index to match against
- * @param type TokenType The type to assign if a match is obtained
- * @return Token The token generated
+ * @param type SyntaxType The type to assign if a match is obtained
+ * @return SyntaxAtom The atom generated
  */
-Token syntax_match_word_token(Syntax syntax, WordList list, String line, size_t start, TokenType type)
+SyntaxAtom syntax_match_word_atom(WordList list, String line, size_t start, SyntaxType type)
 {
-    Token token = {0};
-    token.pair = -1;
+    SyntaxAtom atom = {0};
 
     for (size_t i = 0; i < list.length; ++i) {
         Word word = list.words[i];
@@ -155,139 +225,123 @@ Token syntax_match_word_token(Syntax syntax, WordList list, String line, size_t 
         if (word.length <= line.length - start &&
             memcmp(line.chars + start, word.chars, word.length) == 0) {
 
-            token.type = type;
-            token.length = word.length;
+            atom.type = type;
+            atom.length = word.length;
             break;
         }
     }
 
-    if (token.length == 0) return token;
+    if (atom.length == 0) return atom;
 
-    if (token.type == TOKEN_COMMENT) {
-        token.length = line.length - start;
-        return token;
-    }
+    atom.length = (atom.type == SYNTAX_COMMENT)
+        ? line.length - start : 0;
 
-    if (syntax_ends_with_separator(syntax, line, start + token.length)) return token;
-
-    token.type = TOKEN_NORMAL;
-    token.length = 0;
-    return token;
+    return atom;
 }
 
 /*
- * Try to match an index of a line with some surrounders from a pair list
- * @param syntax Syntax The syntax definition to use
+ * Try to match an index of a line in a pair list
  * @param list PairList The pair list
  * @param line String The line
  * @param start size_t The index to match against
- * @param type TokenType The type to assign if a match is obtained
- * @return Token The token generated
+ * @param type SyntaxType The type to assign if a match is obtained
+ * @param cache *SyntaxCache The syntax cache
+ * @param anchor size_t The anchor in the syntax cache to use
+ * @return SyntaxAtom The atom generated
  */
-Token syntax_match_pair_token(PairList list, String line, size_t start, TokenType type)
+SyntaxAtom syntax_match_pair_atom(PairList list, String line, size_t start, SyntaxType type, SyntaxCache *cache, size_t anchor)
 {
-    Token token = {0};
-    token.pair = pair_list_find(list, line, start, 0);
+    SyntaxAtom atom = {0};
+    int pair = pair_list_find_element(list, line, start, 0);
 
-    if (token.pair == -1) return token;
-    token.type = type;
+    if (pair == -1) return atom;
+    atom.type = type;
 
-    Word end = list.pairs[token.pair].words[1];
-
-    for (size_t i = start + list.pairs[token.pair].words[0].length; i < line.length; ++i) {
-        if (end.length <= line.length - i &&
-            memcmp(end.chars, line.chars + i, end.length) == 0) {
-
-            token.length = i - start + end.length;
-            token.pair = -1;
-            return token;
+    int end = pair_list_find_end(list.pairs[pair], line, start, list.pairs[pair].words[0].length);
+    if (end == -1) {
+        if (type == SYNTAX_COMMENT) {
+            cache->anchors[anchor].comment = pair;
+        } else if (type == SYNTAX_STRING) {
+            cache->anchors[anchor].string = pair;
         }
+    } else {
+        atom.length = end;
+        return atom;
     }
 
-    token.length = line.length - start;
-    return token;
+    atom.length = line.length - start;
+    return atom;
 }
 
 /*
- * Get the token at an index of a line
- * @param syntax Syntax The syntax definition to use
+ * End a paired atom in the syntax cache if possible
+ * @param list PairList The pair list
+ * @param pair *int The pair in the syntax cache
+ * @param type SyntaxType The atom type
+ * @param line String The source line
+ * @param start size_t The starting abcissa
+ * @return SyntaxAtom The generated atom
+ */
+SyntaxAtom syntax_end_paired_atom(PairList list, int *pair, SyntaxType type, String line, size_t start)
+{
+    SyntaxAtom atom = {0};
+    int end = pair_list_find_end(list.pairs[*pair], line, start, 0);
+
+    if (end == -1) {
+        atom.length = line.length - start;
+    } else {
+        atom.length = end;
+        *pair = -1;
+    }
+
+    atom.type = type;
+    return atom;
+}
+
+/*
+ * Get the atom at an index of a line
+ * @param syntax Syntax The syntax context to use
  * @param line String The line to parse
  * @param start size_t The index to parse at
- * @return Token The parsed token
+ * @return SyntaxAtom The parsed atom
  */
-Token syntax_get_token(Syntax syntax, String line, size_t start)
+SyntaxAtom syntax_get_atom(SyntaxContext context, String line, size_t start, SyntaxCache *cache, size_t anchor)
 {
-    Token token = {0};
-    token.pair = -1;
+    SyntaxAtom atom = {0};
 
-    if (start == line.length) return token;
+    int *comment = &cache->anchors[anchor].comment;
+    int *string = &cache->anchors[anchor].string;
 
-    token = syntax_match_word_token(syntax, syntax.comment, line, start, TOKEN_COMMENT);
-    if (token.length) return token;
+    if (start == line.length) return atom;
 
-    token = syntax_match_word_token(syntax, syntax.types, line, start, TOKEN_TYPE);
-    if (token.length) return token;
-
-    token = syntax_match_word_token(syntax, syntax.keywords, line, start, TOKEN_KEYWORD);
-    if (token.length) return token;
-
-    token = syntax_match_word_token(syntax, syntax.macros, line, start, TOKEN_MACRO);
-    if (token.length) return token;
-
-    token = syntax_match_pair_token(syntax.comments, line, start, TOKEN_COMMENT);
-    if (token.length) return token;
-
-    token = syntax_match_pair_token(syntax.string, line, start, TOKEN_STRING);
-    if (token.length) return token;
-
-    size_t i = start;
-    bool type = syntax_match_separator(syntax, line.chars[i]);
-    while (++i < line.length && syntax_match_separator(syntax, line.chars[i]) == type);
-
-    token.type = TOKEN_NORMAL;
-    token.length = i - start;
-
-    return token;
-}
-
-/*
- * End a multiline token
- * @param syntax Syntax The syntax definition to use
- * @param line String The line to check the token end in
- * @param token *Token The token to end
- * @return bool Whether the ending was successful
- */
-bool syntax_end_token(Syntax syntax, String line, Token *token)
-{
-    if (token->pair != -1) {
-        Word end;
-
-        switch (token->type) {
-        case TOKEN_STRING:
-            end = syntax.string.pairs[token->pair].words[1];
-            break;
-        case TOKEN_COMMENT:
-            end = syntax.comments.pairs[token->pair].words[1];
-            break;
-        default:
-            endwin();
-            ASSERT(0, "unreachable");
-            break;
-        }
-
-        for (size_t i = 0; i < line.length; ++i) {
-            if (end.length <= line.length - i &&
-                memcmp(line.chars + i, end.chars, end.length) == 0) {
-                token->length = i + end.length;
-                token->pair = -1;
-                return true;
-            }
-        }
-
-        token->length = line.length;
-        return false;
+    if (*comment != -1) {
+        return syntax_end_paired_atom(context.comments, comment, SYNTAX_COMMENT, line, start);
+    } else if (*string != -1) {
+        return syntax_end_paired_atom(context.string, string, SYNTAX_STRING, line, start);
     }
 
-    endwin();
-    ASSERT(0, "unreachable");
+    atom = syntax_match_pair_atom(context.comments, line, start, SYNTAX_COMMENT, cache, anchor);
+    if (atom.length) return atom;
+
+    atom = syntax_match_pair_atom(context.string, line, start, SYNTAX_STRING, cache, anchor);
+    if (atom.length) return atom;
+
+    atom = syntax_match_word_atom(context.comment, line, start, SYNTAX_COMMENT);
+    if (atom.length) return atom;
+
+    size_t i = start;
+    if (syntax_match_identifier(context, line.chars[i++])) {
+        while (i < line.length && syntax_match_identifier(context, line.chars[i])) i++;
+        atom.length = i - start;
+
+        if (word_list_match_atom(context.types, line.chars + start, &atom, SYNTAX_TYPE)) return atom;
+        if (word_list_match_atom(context.keywords, line.chars + start, &atom, SYNTAX_KEYWORD)) return atom;
+        if (word_list_match_atom(context.macros, line.chars + start, &atom, SYNTAX_MACRO)) return atom;
+    } else {
+        while (i < line.length && line.chars[i] == line.chars[start]) i++;
+        atom.length = i - start;
+    }
+
+    atom.type = SYNTAX_NORMAL;
+    return atom;
 }

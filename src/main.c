@@ -1,47 +1,62 @@
 #include "editor.h"
 
 // C-syntax for testing
-void c_syntax(Syntax *syntax)
+void c_syntax(SyntaxContext *context)
 {
-    syntax->separators = "()[]{}!@#$%^&*-=+\\|;:,.?<> ";
+    context->identifier = strdup("_#");
 
-    word_list_push(&syntax->types, "int");
-    word_list_push(&syntax->types, "void");
-    word_list_push(&syntax->types, "float");
-    word_list_push(&syntax->types, "double");
-    word_list_push(&syntax->types, "char");
-    word_list_push(&syntax->types, "bool");
+    word_list_push(&context->types, "int");
+    word_list_push(&context->types, "void");
+    word_list_push(&context->types, "float");
+    word_list_push(&context->types, "double");
+    word_list_push(&context->types, "char");
+    word_list_push(&context->types, "bool");
 
-    word_list_push(&syntax->keywords, "if");
-    word_list_push(&syntax->keywords, "else");
-    word_list_push(&syntax->keywords, "while");
-    word_list_push(&syntax->keywords, "for");
-    word_list_push(&syntax->keywords, "do");
-    word_list_push(&syntax->keywords, "const");
-    word_list_push(&syntax->keywords, "static");
-    word_list_push(&syntax->keywords, "auto");
-    word_list_push(&syntax->keywords, "register");
-    word_list_push(&syntax->keywords, "inline");
-    word_list_push(&syntax->keywords, "typedef");
-    word_list_push(&syntax->keywords, "struct");
-    word_list_push(&syntax->keywords, "union");
-    word_list_push(&syntax->keywords, "enum");
-    word_list_push(&syntax->keywords, "return");
-    word_list_push(&syntax->keywords, "switch");
-    word_list_push(&syntax->keywords, "case");
-    word_list_push(&syntax->keywords, "default");
+    word_list_push(&context->keywords, "if");
+    word_list_push(&context->keywords, "else");
+    word_list_push(&context->keywords, "while");
+    word_list_push(&context->keywords, "for");
+    word_list_push(&context->keywords, "do");
+    word_list_push(&context->keywords, "const");
+    word_list_push(&context->keywords, "static");
+    word_list_push(&context->keywords, "auto");
+    word_list_push(&context->keywords, "register");
+    word_list_push(&context->keywords, "inline");
+    word_list_push(&context->keywords, "typedef");
+    word_list_push(&context->keywords, "struct");
+    word_list_push(&context->keywords, "union");
+    word_list_push(&context->keywords, "enum");
+    word_list_push(&context->keywords, "return");
+    word_list_push(&context->keywords, "switch");
+    word_list_push(&context->keywords, "case");
+    word_list_push(&context->keywords, "default");
 
-    word_list_push(&syntax->macros, "#include");
-    word_list_push(&syntax->macros, "#ifndef");
-    word_list_push(&syntax->macros, "#ifdef");
-    word_list_push(&syntax->macros, "#define");
-    word_list_push(&syntax->macros, "#endif");
+    word_list_push(&context->macros, "#if");
+    word_list_push(&context->macros, "#pragma");
+    word_list_push(&context->macros, "#include");
+    word_list_push(&context->macros, "#ifndef");
+    word_list_push(&context->macros, "#ifdef");
+    word_list_push(&context->macros, "#define");
+    word_list_push(&context->macros, "#endif");
 
-    word_list_push(&syntax->comment, "//");
+    word_list_push(&context->comment, "//");
 
-    pair_list_push(&syntax->string, "\"", "\"");
-    pair_list_push(&syntax->string, "'", "'");
-    pair_list_push(&syntax->comments, "/*", "*/");
+    pair_list_push(&context->string, "\"", "\"");
+    pair_list_push(&context->string, "'", "'");
+    pair_list_push(&context->comments, "/*", "*/");
+}
+
+void zenburn_colors(void)
+{
+    init_pair(SYNTAX_KEYWORD, 11, -1);
+    init_pair(SYNTAX_TYPE, 4, -1);
+    init_pair(SYNTAX_MACRO, 12, -1);
+    init_pair(SYNTAX_STRING, 1, -1);
+    init_pair(SYNTAX_COMMENT, 10, -1);
+
+    init_pair(UI_SEARCH, 3, 8);
+    init_pair(UI_LINE_NUMBERS, 7, -1);
+    init_pair(UI_STATUS, 0, 10);
 }
 
 int main(int argc, char **argv)
@@ -53,17 +68,11 @@ int main(int argc, char **argv)
     noecho();
     keypad(stdscr, true);
     raw();
+    cbreak();
+
     start_color();
     use_default_colors();
-    init_pair(TOKEN_KEYWORD, 11, -1);
-    init_pair(TOKEN_TYPE, 4, -1);
-    init_pair(TOKEN_MACRO, 12, -1);
-    init_pair(TOKEN_STRING, 1, -1);
-    init_pair(TOKEN_COMMENT, 10, -1);
-
-    init_pair(UI_SEARCH, 3, 8);
-    init_pair(UI_LINE_NUMBERS, 7, -1);
-    init_pair(UI_STATUS, 0, 10);
+    zenburn_colors();
 
     Editor editor = {0};
     c_syntax(&editor.syntax);
@@ -76,12 +85,8 @@ int main(int argc, char **argv)
 
     editor_interact(&editor);
     buffer_free(&buffer);
-    word_list_free(&editor.syntax.types);
-    word_list_free(&editor.syntax.keywords);
-    word_list_free(&editor.syntax.macros);
-    word_list_free(&editor.syntax.comment);
-    pair_list_free(&editor.syntax.string);
-    pair_list_free(&editor.syntax.comments);
+    syntax_context_free(&editor.syntax);
+    syntax_cache_free(&editor.cache);
 
     endwin();
 }

@@ -26,19 +26,28 @@ bool editor_cursor_correct(Editor *editor)
 /*
  * Refresh the virtual cursor position in the editor
  * @param Editor *editor The editor to refresh the cursor in
- * @return bool Whether the refreshing was needed
  */
-bool editor_revert_cursor(Editor *editor)
+void editor_revert_cursor(Editor *editor)
 {
-    if (editor_update_size(editor)) return editor_cursor_inscreen(editor);
+    if (editor_update_size(editor)) {
+        editor->update = true;
+        return;
+    }
 
-    if (editor_update_size(editor) || !editor_cursor_correct(editor)) {
+    if (!editor_cursor_correct(editor)) {
+        Vec2D init = editor->anchor;
+
         editor->cursor.y = editor->buffer->cursor.y % editor->size.y;
         editor->cursor.x = editor->buffer->cursor.x % editor->size.x;
         editor->anchor.y = editor->buffer->cursor.y - editor->cursor.y;
         editor->anchor.x = editor->buffer->cursor.x - editor->cursor.x;
+
+        if (diff(init.y, editor->anchor.y) >= editor->size.y) {
+            editor->update = true;
+        } else if (diff(init.x, editor->anchor.x) >= editor->size.x) {
+            editor->update = true;
+        }
     }
-    return false;
 }
 
 /*
@@ -73,7 +82,7 @@ bool editor_update_size(Editor *editor)
         .y = editor->size.y
     };
 
-    editor_update_lines(editor);
+    editor->size.x = COLS - editor->fringe - 1;
     editor->size.y = LINES - 1;
 
     return original.x != editor->size.x || original.y != editor->size.y;
@@ -114,81 +123,122 @@ void editor_render_fringe(Editor *editor, size_t line)
 }
 
 /*
- * Print a token
- * @param editor *Editor The editor in which to render the token
- * @param index Vec2D The starting position of the token
- * @param string String The source of the token
- * @param token Token The token
+ * Print a string in a particular color
+ * @param string *char The string to print
+ * @param count size_t The number of characters to print
+ * @param type SyntaxType The syntax type of the string
  */
-void editor_print_token(Editor *editor, Vec2D position, String string, Token token)
+void editor_print_colored(const char *string, size_t count, SyntaxType type)
 {
-    size_t ex = min(editor->anchor.x + editor->size.x, string.length);
-    size_t ey = min(editor->anchor.y + editor->size.y, editor->buffer->length);
+    attron(COLOR_PAIR(type));
+    if (type == SYNTAX_KEYWORD) {
+        attron(A_BOLD);
+    } else {
+        attroff(A_BOLD);
+    }
+    
+    printw("%.*s", count, string);
 
-    if (position.x >= editor->anchor.x && position.x < ex &&
-        position.y >= editor->anchor.y && position.y < ey) {
+    attroff(COLOR_PAIR(type));
+}
 
-        attron(COLOR_PAIR(token.type));
-        if (token.type == TOKEN_KEYWORD) {
-            attron(A_BOLD);
-        } else {
-            attroff(A_BOLD);
+/*
+ * Print an atom
+ * @param editor *Editor The editor in which to render the atom
+ * @param index Vec2D The starting position of the atom
+ * @param string String The source of the atom
+ * @param atom SyntaxAtom The atom
+ */
+void editor_print_atom(Editor *editor, Vec2D position, String string, SyntaxAtom atom)
+{
+    if (position.x < editor->anchor.x + editor->size.x) {
+
+        if (position.x >= editor->anchor.x) {
+            editor_print_colored(string.chars + position.x,
+                                 min(atom.length, editor->anchor.x + editor->size.x - position.x),
+                                 atom.type);
+        } else if (position.x + atom.length > editor->anchor.x) {
+            editor_print_colored(string.chars + editor->anchor.x,
+                                 min(atom.length + position.x - editor->anchor.x, editor->size.x),
+                                 atom.type);
         }
 
-        printw("%.*s",
-               min(token.length, editor->anchor.x + editor->size.x - position.x),
-               string.chars + position.x);
-
-        attroff(COLOR_PAIR(token.type));
     }
 }
 
 /*
- * Render a token
- * @param editor *Editor The editor in which to render the token
+ * Build the syntax cache upto a point
+ * @param editor *Editor The editor to build the cache in
+ * @param end size_t The ending ordinate
+ * @param Vec2D The coordinate to start rendering from
+ */
+Vec2D editor_build_cache(Editor *editor, size_t end)
+{
+    size_t anchor = min(editor->cache.comment, editor->cache.string);
+
+    Vec2D head = {0};
+    head.y = anchor * editor->size.y;
+
+    String line = {0};
+    SyntaxAtom atom = {0};
+
+    if (head.y == 0) {
+        editor->cache.anchors[anchor].comment = anchor
+            ? editor->cache.anchors[anchor - 1].comment : -1;
+
+        editor->cache.anchors[anchor].string = anchor
+            ? editor->cache.anchors[anchor - 1].string : -1;
+    }
+
+    while (head.y < end) {
+        line = editor->buffer->lines[head.y];
+        atom = syntax_get_atom(editor->syntax, line, head.x, &editor->cache, anchor);
+
+        head.x += atom.length;
+        if (head.x == line.length) {
+            head.x = 0;
+            head.y++;
+
+            if (head.y % editor->size.y == 1) {
+                anchor++;
+                editor->cache.anchors[anchor].comment = anchor
+                    ? editor->cache.anchors[anchor - 1].comment : -1;
+                editor->cache.anchors[anchor].string = anchor
+                    ? editor->cache.anchors[anchor - 1].string : -1;
+            }
+        }
+    }
+
+    editor->cache.comment = anchor;
+    editor->cache.string = anchor;
+
+    return head;
+}
+
+/*
+ * Render an atom
+ * @param editor *Editor The editor in which to render the atom
  * @param end size_t The ending ordinate
  * @param head *Vec2D The head of the rendering process
- * @param bool Whether the rendering can be continued
+ * @param anchor size_t The syntax cache anchor to use for rendering the atom
+ * @return bool Whether the rendering can be continued
  */
-bool editor_render_token(Editor *editor, size_t end, Vec2D *head)
+bool editor_render_atom(Editor *editor, size_t end, Vec2D *head, size_t anchor)
 {
     String line = editor->buffer->lines[head->y];
-    Token token = syntax_get_token(editor->syntax, line, head->x);
+    SyntaxAtom atom = syntax_get_atom(editor->syntax, line, head->x, &editor->cache, anchor);
 
-    if (head->x == 0 && head->y >= editor->anchor.y)
-        editor_render_fringe(editor, head->y);
+    if (head->x == 0) editor_render_fringe(editor, head->y);
 
-    editor_print_token(editor, *head, line, token);
-    head->x += token.length;
+    editor_print_atom(editor, *head, line, atom);
+    head->x += atom.length;
 
     if (head->x == line.length && ++head->y < end) {
-        if (head->y > editor->anchor.y &&
-            (line.length < editor->size.x ||
-             head->x - editor->anchor.x < editor->size.x)) {
+        if (line.length < editor->size.x ||
+            head->x - editor->anchor.x < editor->size.x) {
             addch('\n');
         }
         head->x = 0;
-    }
-
-    while (token.pair != -1 && head->y < end) {
-        if (head->y >= editor->anchor.y) editor_render_fringe(editor, head->y);
-
-        line = editor->buffer->lines[head->y];
-        if (syntax_end_token(editor->syntax, line, &token)) token.pair = -1;
-        editor_print_token(editor, *head, line, token);
-
-        if (token.pair == -1) {
-            head->x = token.length;
-            return true;
-        } else {
-            head->y++;
-        }
-
-        if (head->y > editor->anchor.y &&
-            (line.length < editor->size.x ||
-             head->x + token.length - editor->anchor.x < editor->size.x)) {
-            addch('\n');
-        }
     }
 
     return head->y < end;
@@ -201,13 +251,39 @@ bool editor_render_token(Editor *editor, size_t end, Vec2D *head)
  */
 void editor_render_buffer(Editor *editor, bool status)
 {
-    if (editor_revert_cursor(editor) || editor->update) {
-        clear();
+    editor_revert_cursor(editor);
+
+    if (editor->update) {
+        erase();
 
         Vec2D head = {0};
-
+        head.y = editor->anchor.y;
+        
         size_t end = min(editor->buffer->length, editor->anchor.y + editor->size.y);
-        while (editor_render_token(editor, end, &head));
+        size_t anchor = max(end / editor->size.y, 1);
+
+        if (anchor > (size_t) min(editor->cache.comment, editor->cache.string)) {
+            syntax_cache_grow(&editor->cache, editor->anchor.y / editor->size.y + 1);
+            editor->cache.length = anchor;
+            head = editor_build_cache(editor, editor->anchor.y);
+        }
+
+        int init_comment = editor->cache.anchors[anchor - 1].comment;
+        int init_string = editor->cache.anchors[anchor - 1].comment;
+
+        editor->cache.anchors[anchor - 1].comment = (anchor == 1)
+            ? -1 : editor->cache.anchors[anchor - 2].comment;
+
+        editor->cache.anchors[anchor - 1].string = (anchor == 1)
+            ? -1 : editor->cache.anchors[anchor - 2].string;
+
+        while (editor_render_atom(editor, end, &head, anchor - 1));
+
+        if (editor->cache.anchors[anchor - 1].comment != init_comment)
+            editor->cache.comment = anchor - 1;
+
+        if (editor->cache.anchors[anchor - 1].string != init_string)
+            editor->cache.string = anchor - 1;
 
         editor->update = false;
     }
@@ -263,26 +339,35 @@ void editor_search(Editor *editor, bool forward)
     search->line.length = 0;
     search->x = 0;
 
+    size_t previous = false;
     int ch;
     while (true) {
-        editor->buffer->cursor = buffer_search_term(editor->buffer,
-                                                    search->line,
-                                                    origin,
-                                                    forward);
-        editor->update = true;
-        editor_render_buffer(editor, false);
+        if (buffer_search_term(editor->buffer, search->line,
+                               origin, forward)) {
+            editor->update = true;
+            previous = true;
+        } else if (previous) {
+            editor->update = true;
+            previous = false;
+        }
 
+        editor_render_buffer(editor, false);
         editor_highlight_matched_term(editor, search->line);
         editor_render_minibuffer(editor);
 
         ch = getch();
         while (search->line.length != 0 && (ch == CTRL('r') || ch == CTRL('s'))) {
-            editor->buffer->cursor = buffer_search_term(editor->buffer,
-                                                        search->line,
-                                                        editor->buffer->cursor,
-                                                        ch == CTRL('s'));
-            editor->update = true;
+            if (buffer_search_term(editor->buffer, search->line,
+                                   editor->buffer->cursor, ch == CTRL('s'))) {
+                editor->update = true;
+                previous = false;
+            } else if (previous) {
+                editor->update = true;
+                previous = false;
+            }
+
             editor_render_buffer(editor, false);
+            editor_highlight_matched_term(editor, search->line);
 
             editor_highlight_matched_term(editor, search->line);
             editor_render_minibuffer(editor);
@@ -308,7 +393,7 @@ void editor_search(Editor *editor, bool forward)
  */
 void editor_interact(Editor *editor)
 {
-    editor_update_size(editor);
+    editor_update_lines(editor);
 
     editor->cursor.x = 0;
     editor->cursor.y = 0;
