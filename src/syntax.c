@@ -194,6 +194,9 @@ void syntax_context_free(SyntaxContext *context)
 
     pair_list_free(&context->string);
     pair_list_free(&context->comments);
+
+    word_list_free(&context->indent);
+    word_list_free(&context->dedent);
 }
 
 /*
@@ -338,10 +341,43 @@ SyntaxAtom syntax_get_atom(SyntaxContext context, String line, size_t start, Syn
         if (word_list_match_atom(context.keywords, line.chars + start, &atom, SYNTAX_KEYWORD)) return atom;
         if (word_list_match_atom(context.macros, line.chars + start, &atom, SYNTAX_MACRO)) return atom;
     } else {
-        while (i < line.length && line.chars[i] == line.chars[start]) i++;
-        atom.length = i - start;
+        atom.length = 1;
     }
 
     atom.type = SYNTAX_NORMAL;
     return atom;
+}
+
+static size_t get_indent_level(String line)
+{
+    size_t level = 0;
+    for (size_t i = 0; i < line.length; ++i) {
+        if (line.chars[i] == '\t') {
+            level++;
+        } else if (line.chars[i] == ' ') {
+            level++;
+            i += 3;
+        } else {
+            break;
+        }
+    }
+    return level;
+}
+
+size_t syntax_indent_level(SyntaxContext context, String previous, SyntaxCache *cache)
+{
+    size_t level = get_indent_level(previous);
+    SyntaxAtom atom = {0};
+
+    for (size_t i = level; i < previous.length; i += atom.length) {
+        atom = syntax_get_atom(context, previous, i, cache, 0);
+
+        if (word_list_match_atom(context.indent, previous.chars + i, &atom, SYNTAX_NORMAL)) {
+            level++;
+        } else if (word_list_match_atom(context.dedent, previous.chars + i, &atom, SYNTAX_NORMAL)) {
+            if (level > 0) level--;
+        }
+    }
+
+    return level;
 }

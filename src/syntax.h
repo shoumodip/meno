@@ -75,6 +75,9 @@ typedef struct {
 
     PairList string;
     PairList comments;
+
+    WordList indent;
+    WordList dedent;
 } SyntaxContext;
 
 void syntax_context_free(SyntaxContext *context);
@@ -83,5 +86,6 @@ SyntaxAtom syntax_match_word_atom(WordList list, String line, size_t start, Synt
 SyntaxAtom syntax_match_pair_atom(PairList list, String line, size_t start, SyntaxType type, SyntaxCache *cache, size_t anchor);
 SyntaxAtom syntax_end_paired_atom(PairList list, int *pair, SyntaxType type, String line, size_t start);
 SyntaxAtom syntax_get_atom(SyntaxContext context, String line, size_t start, SyntaxCache *cache, size_t anchor);
+size_t syntax_indent_level(SyntaxContext context, String previous, SyntaxCache *cache);
 
 #endif // SYNTAX_H

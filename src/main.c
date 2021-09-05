@@ -44,6 +44,9 @@ void c_syntax(SyntaxContext *context)
     pair_list_push(&context->string, "\"", "\"");
     pair_list_push(&context->string, "'", "'");
     pair_list_push(&context->comments, "/*", "*/");
+
+    word_list_push(&context->indent, "{");
+    word_list_push(&context->dedent, "}");
 }
 
 void zenburn_colors(void)

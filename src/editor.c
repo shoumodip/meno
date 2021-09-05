@@ -152,16 +152,14 @@ void editor_print_colored(Editor *editor, const char *string, size_t count, Synt
     
     size_t length = 0;
     if (*string == '\t') {
-        length = min(editor->size.x,
-                     editor->tabsize - editor->cursor.x % editor->tabsize +
-                     editor->tabsize * (count - 1));
+        length = min(editor->size.x, editor->tabsize - editor->cursor.x % editor->tabsize);
 
         printw("%*s", length, "");
     } else if (iscntrl(*string)) {
-        length = min(editor->size.x, count * 2);
+        length = min(editor->size.x, 2);
 
         size_t space = editor->size.x - editor->cursor.x;
-        printw("%.*s", min(space / 2, count), string);
+        printw("%.*s", min(space / 2, 1), string);
     } else {
         length = min(editor->size.x, count);
         printw("%.*s", length, string);
@@ -535,8 +533,25 @@ void editor_interact(Editor *editor)
             }
             break;
 
+        case '\n': {
+            buffer_insert_char(editor->buffer, ch);
+            size_t level = syntax_indent_level(editor->syntax,
+                                               editor->buffer->lines[editor->buffer->cursor.y - 1],
+                                               &editor->cache);
+
+            level *= 4;
+            char indent[level];
+            memset(indent, ' ', level);
+
+            string_insert(&editor->buffer->lines[editor->buffer->cursor.y], 0, indent, level);
+
+            editor->buffer->cursor.x = level;
+            editor_update_lines(editor);
+            break;
+        }
+
         default:
-            if (isprint(ch) || ch == '\n') {
+            if (isprint(ch) || ch == '\t') {
                 buffer_insert_char(editor->buffer, ch);
                 editor_update_lines(editor);
             }
