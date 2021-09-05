@@ -14,3 +14,16 @@ $ make
 * Dependencies
 - [[https://www.gnu.org/software/libc/][GNU C library]]
 - [[https://invisible-island.net/ncurses/][Ncurses]]
+
+* Features [4/11]
+- [X] Text manipulations
+- [X] Incremental search
+- [X] Syntax highlighter
+- [X] Indentation system
+- [ ] Configuration system
+- [ ] Macros
+- [ ] Undo system
+- [ ] Count system
+- [ ] Regions
+- [ ] Clipboard
+- [ ] Help system
