@@ -20,6 +20,7 @@ typedef struct {
 
     SyntaxContext syntax;
     SyntaxCache cache;
+    size_t tabsize;
 } Editor;
 
 bool editor_cursor_inscreen(Editor *editor);
@@ -31,7 +32,7 @@ bool editor_update_size(Editor *editor);
 
 void editor_render_status(Editor *editor);
 void editor_render_fringe(Editor *editor, size_t line);
-void editor_print_colored(const char *string, size_t count, SyntaxType type);
+void editor_print_colored(Editor *editor, const char *string, size_t count, SyntaxType type);
 void editor_print_atom(Editor *editor, Vec2D index, String string, SyntaxAtom atom);
 Vec2D editor_build_cache(Editor *editor, size_t end);
 

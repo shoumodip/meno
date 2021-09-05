@@ -75,6 +75,7 @@ int main(int argc, char **argv)
     zenburn_colors();
 
     Editor editor = {0};
+    editor.tabsize = 4;
     c_syntax(&editor.syntax);
 
     Buffer buffer = {0};

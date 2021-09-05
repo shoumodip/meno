@@ -34,19 +34,29 @@ void editor_revert_cursor(Editor *editor)
         return;
     }
 
-    if (!editor_cursor_correct(editor)) {
-        Vec2D init = editor->anchor;
+    Vec2D init = editor->anchor;
+    String line = editor->buffer->lines[editor->buffer->cursor.y];
 
-        editor->cursor.y = editor->buffer->cursor.y % editor->size.y;
-        editor->cursor.x = editor->buffer->cursor.x % editor->size.x;
-        editor->anchor.y = editor->buffer->cursor.y - editor->cursor.y;
-        editor->anchor.x = editor->buffer->cursor.x - editor->cursor.x;
-
-        if (diff(init.y, editor->anchor.y) >= editor->size.y) {
-            editor->update = true;
-        } else if (diff(init.x, editor->anchor.x) >= editor->size.x) {
-            editor->update = true;
+    editor->cursor.x = 0;
+    for (size_t i = 0; i < editor->buffer->cursor.x; ++i) {
+        if (line.chars[i] == '\t') {
+            editor->cursor.x += editor->tabsize - editor->cursor.x % editor->tabsize;
+        } else if (iscntrl(line.chars[i])) {
+            editor->cursor.x += 2;
+        } else {
+            editor->cursor.x++;
         }
+    }
+
+    editor->cursor.x = editor->cursor.x % editor->size.x;
+    editor->cursor.y = editor->buffer->cursor.y % editor->size.y;
+    editor->anchor.x = editor->buffer->cursor.x - editor->cursor.x;
+    editor->anchor.y = editor->buffer->cursor.y - editor->cursor.y;
+
+    if (diff(init.y, editor->anchor.y) >= editor->size.y) {
+        editor->update = true;
+    } else if (diff(init.x, editor->anchor.x) >= editor->size.x) {
+        editor->update = true;
     }
 }
 
@@ -124,12 +134,15 @@ void editor_render_fringe(Editor *editor, size_t line)
 
 /*
  * Print a string in a particular color
+ * @param editor *Editor The editor in which to print the string
  * @param string *char The string to print
- * @param count size_t The number of characters to print
+ * @param count size_t The number of characters in the maximum limit
  * @param type SyntaxType The syntax type of the string
  */
-void editor_print_colored(const char *string, size_t count, SyntaxType type)
+void editor_print_colored(Editor *editor, const char *string, size_t count, SyntaxType type)
 {
+    if (count == 0) return;
+
     attron(COLOR_PAIR(type));
     if (type == SYNTAX_KEYWORD) {
         attron(A_BOLD);
@@ -137,8 +150,24 @@ void editor_print_colored(const char *string, size_t count, SyntaxType type)
         attroff(A_BOLD);
     }
     
-    printw("%.*s", count, string);
+    size_t length = 0;
+    if (*string == '\t') {
+        length = min(editor->size.x,
+                     editor->tabsize - editor->cursor.x % editor->tabsize +
+                     editor->tabsize * (count - 1));
 
+        printw("%*s", length, "");
+    } else if (iscntrl(*string)) {
+        length = min(editor->size.x, count * 2);
+
+        size_t space = editor->size.x - editor->cursor.x;
+        printw("%.*s", min(space / 2, count), string);
+    } else {
+        length = min(editor->size.x, count);
+        printw("%.*s", length, string);
+    }
+
+    editor->cursor.x += length;
     attroff(COLOR_PAIR(type));
 }
 
@@ -151,18 +180,15 @@ void editor_print_colored(const char *string, size_t count, SyntaxType type)
  */
 void editor_print_atom(Editor *editor, Vec2D position, String string, SyntaxAtom atom)
 {
-    if (position.x < editor->anchor.x + editor->size.x) {
+    if (editor->cursor.x < editor->size.x) {
+        size_t dx = position.x < editor->anchor.x
+            ? editor->anchor.x - position.x
+            : 0;
 
-        if (position.x >= editor->anchor.x) {
-            editor_print_colored(string.chars + position.x,
-                                 min(atom.length, editor->anchor.x + editor->size.x - position.x),
-                                 atom.type);
-        } else if (position.x + atom.length > editor->anchor.x) {
-            editor_print_colored(string.chars + editor->anchor.x,
-                                 min(atom.length + position.x - editor->anchor.x, editor->size.x),
-                                 atom.type);
-        }
-
+        editor_print_colored(editor,
+                             string.chars + position.x + dx,
+                             atom.length - dx,
+                             atom.type);
     }
 }
 
@@ -234,11 +260,10 @@ bool editor_render_atom(Editor *editor, size_t end, Vec2D *head, size_t anchor)
     head->x += atom.length;
 
     if (head->x == line.length && ++head->y < end) {
-        if (line.length < editor->size.x ||
-            head->x - editor->anchor.x < editor->size.x) {
+        if (line.length < editor->size.x || editor->cursor.x < editor->size.x)
             addch('\n');
-        }
-        head->x = 0;
+
+        head->x = editor->cursor.x = 0;
     }
 
     return head->y < end;
@@ -277,7 +302,10 @@ void editor_render_buffer(Editor *editor, bool status)
         editor->cache.anchors[anchor - 1].string = (anchor == 1)
             ? -1 : editor->cache.anchors[anchor - 2].string;
 
+        Vec2D cursor = editor->cursor;
+        editor->cursor = (Vec2D) {0};
         while (editor_render_atom(editor, end, &head, anchor - 1));
+        editor->cursor = cursor;
 
         if (editor->cache.anchors[anchor - 1].comment != init_comment)
             editor->cache.comment = anchor - 1;
