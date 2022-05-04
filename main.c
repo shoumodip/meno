@@ -10,6 +10,8 @@
 #include <termios.h>
 #include <sys/ioctl.h>
 
+#include "sv.h"
+
 #define INC_CAP 128
 #define KEY_MAX 128
 
@@ -25,13 +27,105 @@ bool vector_eq(Vector a, Vector b)
     return a.x == b.x && a.y == b.y;
 }
 
+// Syntax
+typedef struct {
+    const SV ident;
+    const SV *keywords;
+    const SV *specials;
+} Syntax;
+
+static const SV c_keywords[] = {
+    SVStatic("if"),
+    SVStatic("else"),
+    SVStatic("return"),
+    {0}
+};
+
+static const SV c_specials[] = {
+    SVStatic("#include"),
+    SVStatic("#define"),
+    {0}
+};
+
+static const Syntax syntaxes[] = {
+    {
+        .ident = SVStatic("#"),
+        .keywords = c_keywords,
+        .specials = c_specials,
+    }
+};
+
+typedef enum {
+    SYNTAX_NORMAL,
+    SYNTAX_KEYWORD,
+    SYNTAX_SPECIAL,
+    COUNT_SYNTAXES
+} SyntaxType;
+
+bool svlist_find(const SV *list, SV pred)
+{
+    while (list->source) {
+        if (sv_eq(*list++, pred)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool syntax_isident(size_t syntax, char ch)
+{
+    return isalnum(ch) || ch == '_' || sv_find(syntaxes[syntax].ident, ch) != -1;
+}
+
+SV syntax_split(size_t syntax, SV *view, SyntaxType *type)
+{
+    SV word = {0};
+    if (syntax_isident(syntax, view->source[0])) {
+        for (size_t i = 1; i < view->length; ++i) {
+            if (!syntax_isident(syntax, view->source[i])) {
+                word = sv_split_at(view, i);
+                break;
+            }
+        }
+    } else {
+        for (size_t i = 1; i < view->length; ++i) {
+            if (syntax_isident(syntax, view->source[i])) {
+                word = sv_split_at(view, i);
+                break;
+            }
+        }
+    }
+    if (!word.source) {
+        word = sv_split_at(view, view->length);
+    }
+
+    if (svlist_find(syntaxes[syntax].keywords, word)) {
+        *type = SYNTAX_KEYWORD;
+    } else if (svlist_find(syntaxes[syntax].specials, word)) {
+        *type = SYNTAX_SPECIAL;
+    } else {
+        *type = SYNTAX_NORMAL;
+    }
+
+    return word;
+}
+
 // Term
 typedef struct {
-    size_t bg;
+    int fg;
+    int bg;
+    bool bold;
 } Color;
 
-#define COLOR_NORMAL (Color) {.bg = 0}
-#define COLOR_VISUAL (Color) {.bg = 239}
+static_assert(COUNT_SYNTAXES == 3);
+static const Color color_syntaxes[] = {
+    [SYNTAX_NORMAL]  = {.fg = 15, .bg = 0,   .bold = false},
+    [SYNTAX_KEYWORD] = {.fg = 3,  .bg = -1,  .bold = true},
+    [SYNTAX_SPECIAL] = {.fg = 14, .bg = -1,  .bold = false},
+};
+
+#define COLOR_NORMAL  (color_syntaxes[SYNTAX_NORMAL])
+#define COLOR_VISUAL  (Color) {.fg = -1, .bg = 239, .bold = false}
 
 typedef struct {
     struct termios save;
@@ -74,7 +168,19 @@ void term_move(Vector cursor)
 
 void term_color(Color color)
 {
-    printf("\x1b[48;5;%zum", color.bg);
+    if (color.bold) {
+        printf("\x1b[1m");
+    } else {
+        printf("\x1b[0m");
+    }
+
+    if (color.bg != -1) {
+        printf("\x1b[48;5;%dm", color.bg);
+    }
+
+    if (color.fg != -1) {
+        printf("\x1b[38;5;%dm", color.fg);
+    }
 }
 
 // String
@@ -243,17 +349,26 @@ void buffer_print(Buffer buffer)
 
     Vector pen;
     for (pen.y = 0; pen.y < buffer.count; ++pen.y) {
-        const String string = buffer.lines[pen.y];
+        pen.x = 0;
 
-        for (pen.x = 0; pen.x < string.size; ++pen.x) {
-            if (buffer.region && vector_eq(pen, start)) {
-                term_color(COLOR_VISUAL);
-            }
+        SV view = sv(buffer.lines[pen.y].data, buffer.lines[pen.y].size);
+        while (view.length) {
+            SyntaxType type;
+            const SV word = syntax_split(0, &view, &type);
 
-            putchar(string.data[pen.x]);
+            term_color(color_syntaxes[type]);
+            for (size_t i = 0; i < word.length; ++i) {
+                if (buffer.region && vector_eq(pen, start)) {
+                    term_color(COLOR_VISUAL);
+                }
 
-            if (buffer.region && vector_eq(pen, end)) {
-                term_color(COLOR_NORMAL);
+                putchar(word.source[i]);
+
+                if (buffer.region && vector_eq(pen, end)) {
+                    term_color(COLOR_NORMAL);
+                }
+
+                pen.x++;
             }
         }
 
