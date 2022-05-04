@@ -257,6 +257,7 @@ int main(void)
         }
     }
 
+    buffer_free(&editor.buffer);
     term_reset();
     return 0;
 }
