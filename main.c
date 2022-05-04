@@ -11,7 +11,7 @@
 #include <sys/ioctl.h>
 
 #define INC_CAP 128
-#define KEY_MAX 127
+#define KEY_MAX 128
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -102,22 +102,22 @@ void string_free(String *string)
     memset(string, 0, sizeof(String));
 }
 
-void string_insert(String *string, size_t index, char ch)
+void string_insert(String *string, size_t index, const char *data, size_t size)
 {
     if (string->size >= string->capacity) {
-        string->capacity = MAX(INC_CAP, string->capacity + INC_CAP);
+        string->capacity = MAX(INC_CAP, MAX(string->capacity + INC_CAP, string->size + size));
         string->data = realloc(string->data, string->capacity);
         assert(string->data);
     }
 
     memmove(string->data + index + 1, string->data + index, string->size - index);
-    string->data[index] = ch;
-    string->size++;
+    memcpy(string->data + index, data, size);
+    string->size += size;
 }
 
 // Buffer
 typedef struct {
-    String *strings;
+    String *lines;
     size_t count;
     size_t capacity;
 
@@ -129,9 +129,9 @@ typedef struct {
 void buffer_free(Buffer *buffer)
 {
     for (size_t i = 0; i < buffer->count; ++i) {
-        string_free(buffer->strings + i);
+        string_free(buffer->lines + i);
     }
-    free(buffer->strings);
+    free(buffer->lines);
     memset(buffer, 0, sizeof(Buffer));
 }
 
@@ -139,15 +139,15 @@ void buffer_grow(Buffer *buffer)
 {
     if (buffer->count >= buffer->capacity) {
         buffer->capacity = MAX(INC_CAP, buffer->capacity + INC_CAP);
-        buffer->strings = realloc(buffer->strings, buffer->capacity * sizeof(String));
-        assert(buffer->strings);
+        buffer->lines = realloc(buffer->lines, buffer->capacity * sizeof(String));
+        assert(buffer->lines);
     }
 }
 
 void buffer_push(Buffer *buffer, String string)
 {
     buffer_grow(buffer);
-    buffer->strings[buffer->count++] = string;
+    buffer->lines[buffer->count++] = string;
 }
 
 void buffer_insert(Buffer *buffer, char ch)
@@ -155,20 +155,20 @@ void buffer_insert(Buffer *buffer, char ch)
     buffer_grow(buffer);
 
     if (buffer->count == 0) {
-        memset(buffer->strings, 0, sizeof(String));
+        memset(buffer->lines, 0, sizeof(String));
         buffer->count = 1;
     }
 
     if (isprint(ch)) {
-        string_insert(buffer->strings + buffer->cursor.y, buffer->cursor.x++, ch);
+        string_insert(buffer->lines + buffer->cursor.y, buffer->cursor.x++, &ch, 1);
     } else if (ch == '\r') {
-        String *prev = buffer->strings + buffer->cursor.y;
+        String *prev = buffer->lines + buffer->cursor.y;
 
-        memmove(buffer->strings + buffer->cursor.y + 1,
-                buffer->strings + buffer->cursor.y,
+        memmove(buffer->lines + buffer->cursor.y + 1,
+                buffer->lines + buffer->cursor.y,
                 (buffer->count - buffer->cursor.y) * sizeof(String));
 
-        buffer->strings[++buffer->cursor.y] =
+        buffer->lines[++buffer->cursor.y] =
             string(prev->data + buffer->cursor.x,
                    prev->size - buffer->cursor.x);
 
@@ -179,7 +179,7 @@ void buffer_insert(Buffer *buffer, char ch)
     }
 }
 
-void buffer_cursor_left(Buffer *buffer)
+void buffer_backward_char(Buffer *buffer)
 {
     if (buffer->count) {
         if (buffer->cursor.x) {
@@ -188,10 +188,10 @@ void buffer_cursor_left(Buffer *buffer)
     }
 }
 
-void buffer_cursor_right(Buffer *buffer)
+void buffer_forward_char(Buffer *buffer)
 {
     if (buffer->count) {
-        if (buffer->cursor.x < buffer->strings[buffer->cursor.y].size) {
+        if (buffer->cursor.x < buffer->lines[buffer->cursor.y].size) {
             buffer->cursor.x++;
         }
     }
@@ -200,11 +200,11 @@ void buffer_cursor_right(Buffer *buffer)
 void buffer_cursor_fix(Buffer *buffer)
 {
     if (buffer->count) {
-        buffer->cursor.x = MIN(buffer->cursor.x, buffer->strings[buffer->cursor.y].size);
+        buffer->cursor.x = MIN(buffer->cursor.x, buffer->lines[buffer->cursor.y].size);
     }
 }
 
-void buffer_cursor_up(Buffer *buffer)
+void buffer_previous_line(Buffer *buffer)
 {
     if (buffer->cursor.y) {
         buffer->cursor.y--;
@@ -212,7 +212,7 @@ void buffer_cursor_up(Buffer *buffer)
     }
 }
 
-void buffer_cursor_down(Buffer *buffer)
+void buffer_next_line(Buffer *buffer)
 {
     if (buffer->cursor.y + 1 < buffer->count) {
         buffer->cursor.y++;
@@ -222,10 +222,6 @@ void buffer_cursor_down(Buffer *buffer)
 
 void buffer_get_region(Buffer buffer, Vector *start, Vector *end)
 {
-    if (!buffer.region) {
-        return;
-    }
-
     *start = buffer.marker;
     *end = buffer.cursor;
 
@@ -241,11 +237,13 @@ void buffer_print(Buffer buffer)
     term_clear();
 
     Vector start, end;
-    buffer_get_region(buffer, &start, &end);
+    if (buffer.region) {
+        buffer_get_region(buffer, &start, &end);
+    }
 
     Vector pen;
     for (pen.y = 0; pen.y < buffer.count; ++pen.y) {
-        const String string = buffer.strings[pen.y];
+        const String string = buffer.lines[pen.y];
 
         for (pen.x = 0; pen.x < string.size; ++pen.x) {
             if (buffer.region && vector_eq(pen, start)) {
@@ -283,6 +281,56 @@ void buffer_toggle_region(Buffer *buffer)
     }
 }
 
+typedef void (*BufferAction)(Buffer *);
+
+void buffer_delete(Buffer *buffer, BufferAction motion)
+{
+    if (buffer->count == 0) {
+        return;
+    }
+
+    if (!buffer->region) {
+        buffer->marker = buffer->cursor;
+        motion(buffer);
+    }
+
+    Vector start, end;
+    buffer_get_region(*buffer, &start, &end);
+
+    if (buffer->region && end.x < buffer->lines[end.y].size) {
+        end.x++;
+    }
+
+    if (start.y == end.y) {
+        if (end.x > start.x) {
+            String *string = buffer->lines + start.y;
+            assert(string->size >= end.x);
+
+            memmove(string->data + start.x, string->data + end.x, string->size - end.x);
+            string->size -= end.x - start.x;
+        }
+    } else {
+        String *string_start = buffer->lines + start.y;
+        String string_end = buffer->lines[end.y];
+
+        string_start->size = start.x;
+        string_insert(string_start, start.x, string_end.data + end.x, string_end.size - end.x);
+
+        for (size_t i = start.y + 1; i <= end.y; ++i) {
+            string_free(buffer->lines + i);
+        }
+
+        memmove(buffer->lines + start.y + 1,
+                buffer->lines + end.y + 1,
+                (buffer->count - end.y - 1) * sizeof(String));
+
+        buffer->count -= end.y - start.y;
+    }
+
+    buffer->region = false;
+    buffer->cursor = start;
+}
+
 // Editor
 typedef struct {
     bool quit;
@@ -298,17 +346,21 @@ void editor_quit(void)
 
 // Mappings
 typedef struct {
-    void (*buffer)(Buffer *);
+    BufferAction buffer;
+    BufferAction delete;
+
     void (*editor)(void);
 } Mapping;
 
-static const Mapping normal_mappings[127] = {
+static const Mapping normal_mappings[KEY_MAX] = {
     [CTRL('q')] = {.editor = editor_quit},
-    [CTRL('b')] = {.buffer = buffer_cursor_left},
-    [CTRL('f')] = {.buffer = buffer_cursor_right},
-    [CTRL('p')] = {.buffer = buffer_cursor_up},
-    [CTRL('n')] = {.buffer = buffer_cursor_down},
+    [CTRL('b')] = {.buffer = buffer_backward_char},
+    [CTRL('f')] = {.buffer = buffer_forward_char},
+    [CTRL('p')] = {.buffer = buffer_previous_line},
+    [CTRL('n')] = {.buffer = buffer_next_line},
     [CTRL(' ')] = {.buffer = buffer_toggle_region},
+    [CTRL('d')] = {.delete = buffer_forward_char},
+    [127]       = {.delete = buffer_backward_char},
 };
 
 int main(void)
@@ -324,6 +376,8 @@ int main(void)
             mapping.editor();
         } else if (mapping.buffer) {
             mapping.buffer(&editor.buffer);
+        } else if (mapping.delete) {
+            buffer_delete(&editor.buffer, mapping.delete);
         } else if (isprint(ch) || ch == '\r') {
             buffer_insert(&editor.buffer, ch);
         }
