@@ -356,7 +356,7 @@ void buffer_print(Buffer buffer)
             SyntaxType type;
             const SV word = syntax_split(0, &view, &type);
 
-            term_color(color_syntaxes[type]);
+            if (type) term_color(color_syntaxes[type]);
             for (size_t i = 0; i < word.length; ++i) {
                 if (buffer.region && vector_eq(pen, start)) {
                     term_color(COLOR_VISUAL);
@@ -370,6 +370,7 @@ void buffer_print(Buffer buffer)
 
                 pen.x++;
             }
+            if (type) term_color(COLOR_NORMAL);
         }
 
         if (buffer.region && vector_eq(pen, start)) {
