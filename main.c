@@ -20,6 +20,63 @@ typedef struct {
     size_t x, y;
 } Vector;
 
+bool vector_eq(Vector a, Vector b)
+{
+    return a.x == b.x && a.y == b.y;
+}
+
+// Term
+typedef struct {
+    size_t bg;
+} Color;
+
+#define COLOR_NORMAL (Color) {.bg = 0}
+#define COLOR_VISUAL (Color) {.bg = 239}
+
+typedef struct {
+    struct termios save;
+    Vector size;
+} Term;
+
+static Term term = {0};
+
+void term_init(void)
+{
+    assert(tcgetattr(STDIN_FILENO, &term.save) != -1);
+
+    struct termios raw = term.save;
+    raw.c_iflag &= ~(ICRNL | IXON);
+    raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG);
+    assert(tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) != -1);
+
+    struct winsize size;
+    assert(ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) != -1);
+    term.size.x = size.ws_col;
+    term.size.y = size.ws_row;
+}
+
+void term_clear(void)
+{
+    printf("\x1b[2J\x1b[H\x1b[3J");
+}
+
+void term_reset(void)
+{
+    term_clear();
+    assert(tcsetattr(STDIN_FILENO, TCSAFLUSH, &term.save) != -1);
+}
+
+void term_move(Vector cursor)
+{
+    printf("\x1b[%zu;%zuH", cursor.y + 1, cursor.x + 1);
+    fflush(stdout);
+}
+
+void term_color(Color color)
+{
+    printf("\x1b[48;5;%zum", color.bg);
+}
+
 // String
 typedef struct {
     char *data;
@@ -64,7 +121,9 @@ typedef struct {
     size_t count;
     size_t capacity;
 
+    bool region;
     Vector cursor;
+    Vector marker;
 } Buffer;
 
 void buffer_free(Buffer *buffer)
@@ -155,57 +214,73 @@ void buffer_cursor_up(Buffer *buffer)
 
 void buffer_cursor_down(Buffer *buffer)
 {
-    if (buffer->cursor.y < buffer->count) {
+    if (buffer->cursor.y + 1 < buffer->count) {
         buffer->cursor.y++;
         buffer_cursor_fix(buffer);
     }
 }
 
-// Term
-typedef struct {
-    struct termios save;
-    Vector size;
-} Term;
-
-static Term term = {0};
-
-void term_init(void)
+void buffer_get_region(Buffer buffer, Vector *start, Vector *end)
 {
-    assert(tcgetattr(STDIN_FILENO, &term.save) != -1);
+    if (!buffer.region) {
+        return;
+    }
 
-    struct termios raw = term.save;
-    raw.c_iflag &= ~(ICRNL | IXON);
-    raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG);
-    assert(tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) != -1);
+    *start = buffer.marker;
+    *end = buffer.cursor;
 
-    struct winsize size;
-    assert(ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) != -1);
-    term.size.x = size.ws_col;
-    term.size.y = size.ws_row;
+    if (start->y > end->y || (start->y == end->y && start->x > end->x)) {
+        const Vector temp = *start;
+        *start = *end;
+        *end = temp;
+    }
 }
 
-void term_clear(void)
-{
-    printf("\x1b[2J\x1b[H\x1b[3J");
-}
-
-void term_reset(void)
+void buffer_print(Buffer buffer)
 {
     term_clear();
-    assert(tcsetattr(STDIN_FILENO, TCSAFLUSH, &term.save) != -1);
+
+    Vector start, end;
+    buffer_get_region(buffer, &start, &end);
+
+    Vector pen;
+    for (pen.y = 0; pen.y < buffer.count; ++pen.y) {
+        const String string = buffer.strings[pen.y];
+
+        for (pen.x = 0; pen.x < string.size; ++pen.x) {
+            if (buffer.region && vector_eq(pen, start)) {
+                term_color(COLOR_VISUAL);
+            }
+
+            putchar(string.data[pen.x]);
+
+            if (buffer.region && vector_eq(pen, end)) {
+                term_color(COLOR_NORMAL);
+            }
+        }
+
+        if (buffer.region && vector_eq(pen, start)) {
+            term_color(COLOR_VISUAL);
+        }
+
+        if (buffer.region && vector_eq(pen, end)) {
+            term_color(COLOR_NORMAL);
+        }
+
+        putchar('\n');
+    }
+
+    term_move(buffer.cursor);
 }
 
-char term_input(void)
+void buffer_toggle_region(Buffer *buffer)
 {
-    char ch;
-    assert(read(STDIN_FILENO, &ch, 1) == 1);
-    return ch;
-}
-
-void term_move(Vector cursor)
-{
-    printf("\x1b[%zu;%zuH", cursor.y + 1, cursor.x + 1);
-    fflush(stdout);
+    if (buffer->region) {
+        buffer->region = false;
+    } else {
+        buffer->region = true;
+        buffer->marker = buffer->cursor;
+    }
 }
 
 // Editor
@@ -233,6 +308,7 @@ static const Mapping normal_mappings[127] = {
     [CTRL('f')] = {.buffer = buffer_cursor_right},
     [CTRL('p')] = {.buffer = buffer_cursor_up},
     [CTRL('n')] = {.buffer = buffer_cursor_down},
+    [CTRL(' ')] = {.buffer = buffer_toggle_region},
 };
 
 int main(void)
@@ -240,13 +316,9 @@ int main(void)
     term_init();
 
     while (!editor.quit) {
-        term_clear();
-        for (size_t i = 0; i < editor.buffer.count; ++i) {
-            printf("%.*s\n", (int) editor.buffer.strings[i].size, editor.buffer.strings[i].data);
-        }
-        term_move(editor.buffer.cursor);
+        buffer_print(editor.buffer);
 
-        const char ch = term_input();
+        const char ch = getchar();
         const Mapping mapping = normal_mappings[(size_t) ch];
         if (mapping.editor) {
             mapping.editor();
