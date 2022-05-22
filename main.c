@@ -29,6 +29,11 @@ static inline bool vector_eq(Vector a, Vector b)
     return a.x == b.x && a.y == b.y;
 }
 
+static inline Vector vector_add(Vector a, Vector b)
+{
+    return (Vector) {.x = a.x + b.x, .y = a.y + b.y};
+}
+
 static inline Vector vector_sub(Vector a, Vector b)
 {
     return (Vector) {.x = a.x - b.x, .y = a.y - b.y};
@@ -255,6 +260,7 @@ typedef struct {
 
     const char *path;
     Vector anchor;
+    size_t syntax;
 } Buffer;
 
 void buffer_free(Buffer *buffer)
@@ -317,16 +323,18 @@ void buffer_open(Buffer *buffer, const char *path)
 
 void buffer_anchor_fix(Buffer *buffer)
 {
-    if (buffer->cursor.y >= buffer->anchor.y + term.size.y) {
-        buffer->anchor.y += 1;
+    const Vector limit = vector_add(buffer->anchor, term.size);
+
+    if (buffer->cursor.y >= limit.y) {
+        buffer->anchor.y += buffer->cursor.y - limit.y + 1;
     } else if (buffer->cursor.y < buffer->anchor.y) {
-        buffer->anchor.y -= 1;
+        buffer->anchor.y -= buffer->anchor.y - buffer->cursor.y;
     }
 
-    if (buffer->cursor.x >= buffer->anchor.x + term.size.x) {
-        buffer->anchor.x += 1;
+    if (buffer->cursor.x >= limit.x) {
+        buffer->anchor.x += buffer->cursor.x - limit.x + 1;
     } else if (buffer->cursor.x < buffer->anchor.x) {
-        buffer->anchor.x -= 1;
+        buffer->anchor.x -= buffer->anchor.x - buffer->cursor.x;
     }
 }
 
@@ -361,12 +369,34 @@ void buffer_insert(Buffer *buffer, char ch)
     }
 }
 
+String buffer_snap_previous_line(Buffer *buffer)
+{
+    const String line = buffer->lines[--buffer->cursor.y];
+    buffer->cursor.x = line.size;
+    return line;
+}
+
+String buffer_snap_next_line(Buffer *buffer)
+{
+    const String line = buffer->lines[++buffer->cursor.y];
+    buffer->cursor.x = 0;
+    return line;
+}
+
+void buffer_anchor_snap(Buffer *buffer)
+{
+    buffer->anchor.x = buffer->cursor.x - buffer->cursor.x % term.size.x;
+}
+
 void buffer_backward_char(Buffer *buffer)
 {
     if (buffer->count) {
         if (buffer->cursor.x) {
             buffer->cursor.x--;
             buffer_anchor_fix(buffer);
+        } else if (buffer->cursor.y) {
+            buffer_snap_previous_line(buffer);
+            buffer_anchor_snap(buffer);
         }
     }
 }
@@ -377,7 +407,62 @@ void buffer_forward_char(Buffer *buffer)
         if (buffer->cursor.x < buffer->lines[buffer->cursor.y].size) {
             buffer->cursor.x++;
             buffer_anchor_fix(buffer);
+            buffer_anchor_snap(buffer);
         }
+    }
+}
+
+void buffer_backward_word(Buffer *buffer)
+{
+    if (buffer->count) {
+        String line = buffer->lines[buffer->cursor.y];
+
+        if (line.size) {
+            if (buffer->cursor.x && syntax_isident(buffer->syntax, line.data[buffer->cursor.x])) {
+                buffer->cursor.x--;
+            }
+
+            while (buffer->cursor.x && !syntax_isident(buffer->syntax, line.data[buffer->cursor.x])) {
+                buffer->cursor.x--;
+            }
+        }
+
+        if (buffer->cursor.x == 0 && buffer->cursor.y) {
+            line = buffer_snap_previous_line(buffer);
+        }
+
+        while (buffer->cursor.x > 1 && syntax_isident(buffer->syntax, line.data[buffer->cursor.x - 1])) {
+            buffer->cursor.x--;
+        }
+
+        if (buffer->cursor.x == 1 && syntax_isident(buffer->syntax, *line.data)) {
+            buffer->cursor.x--;
+        }
+
+        buffer_anchor_snap(buffer);
+        buffer_anchor_fix(buffer);
+    }
+}
+
+void buffer_forward_word(Buffer *buffer)
+{
+    if (buffer->count) {
+        String line = buffer->lines[buffer->cursor.y];
+
+        while (buffer->cursor.x < line.size && !syntax_isident(buffer->syntax, line.data[buffer->cursor.x])) {
+            buffer->cursor.x++;
+        }
+
+        if (buffer->cursor.x == line.size && buffer->cursor.y < buffer->count) {
+            line = buffer_snap_next_line(buffer);
+        }
+
+        while (buffer->cursor.x < line.size && syntax_isident(buffer->syntax, line.data[buffer->cursor.x])) {
+            buffer->cursor.x++;
+        }
+
+        buffer_anchor_snap(buffer);
+        buffer_anchor_fix(buffer);
     }
 }
 
@@ -393,6 +478,7 @@ void buffer_previous_line(Buffer *buffer)
     if (buffer->cursor.y) {
         buffer->cursor.y--;
         buffer_cursor_fix(buffer);
+        buffer_anchor_snap(buffer);
         buffer_anchor_fix(buffer);
     }
 }
@@ -402,8 +488,39 @@ void buffer_next_line(Buffer *buffer)
     if (buffer->cursor.y + 1 < buffer->count) {
         buffer->cursor.y++;
         buffer_cursor_fix(buffer);
+        buffer_anchor_snap(buffer);
         buffer_anchor_fix(buffer);
     }
+}
+
+void buffer_previous_para(Buffer *buffer)
+{
+    while (buffer->cursor.y && buffer->lines[buffer->cursor.y].size) {
+        buffer->cursor.y--;
+    }
+
+    while (buffer->cursor.y && !buffer->lines[buffer->cursor.y].size) {
+        buffer->cursor.y--;
+    }
+
+    buffer_cursor_fix(buffer);
+    buffer_anchor_snap(buffer);
+    buffer_anchor_fix(buffer);
+}
+
+void buffer_next_para(Buffer *buffer)
+{
+    while (buffer->cursor.y + 1 < buffer->count && buffer->lines[buffer->cursor.y].size) {
+        buffer->cursor.y++;
+    }
+
+    while (buffer->cursor.y + 1 < buffer->count && !buffer->lines[buffer->cursor.y].size) {
+        buffer->cursor.y++;
+    }
+
+    buffer_cursor_fix(buffer);
+    buffer_anchor_snap(buffer);
+    buffer_anchor_fix(buffer);
 }
 
 void buffer_get_region(Buffer buffer, Vector *start, Vector *end)
@@ -447,7 +564,7 @@ void buffer_print(Buffer buffer)
 
         while (view.size) {
             SyntaxType type;
-            const SV word = syntax_split(0, &view, &type);
+            const SV word = syntax_split(buffer.syntax, &view, &type);
 
             if (type) term_color(color_syntaxes[type]);
             for (size_t i = 0; i < word.size; ++i) {
@@ -543,6 +660,7 @@ void buffer_delete(Buffer *buffer, BufferAction motion)
 // Editor
 typedef struct {
     bool quit;
+    bool escape;
     Buffer buffer;
 } Editor;
 
@@ -551,6 +669,11 @@ static Editor editor;
 void editor_quit(void)
 {
     editor.quit = true;
+}
+
+void editor_escape_map(void)
+{
+    editor.escape = true;
 }
 
 // Mappings
@@ -563,6 +686,7 @@ typedef struct {
 
 static const Mapping normal_mappings[KEY_MAX] = {
     [CTRL('q')] = {.editor = editor_quit},
+    [27] = {.editor = editor_escape_map},
     [CTRL('b')] = {.buffer = buffer_backward_char},
     [CTRL('f')] = {.buffer = buffer_forward_char},
     [CTRL('p')] = {.buffer = buffer_previous_line},
@@ -570,6 +694,13 @@ static const Mapping normal_mappings[KEY_MAX] = {
     [CTRL('v')] = {.buffer = buffer_toggle_region},
     [CTRL('d')] = {.delete = buffer_forward_char},
     [127]       = {.delete = buffer_backward_char},
+};
+
+static const Mapping escape_mappings[KEY_MAX] = {
+    ['b'] = {.buffer = buffer_backward_word},
+    ['f'] = {.buffer = buffer_forward_word},
+    ['p'] = {.buffer = buffer_previous_para},
+    ['n'] = {.buffer = buffer_next_para},
 };
 
 int main(int argc, char **argv)
@@ -584,7 +715,9 @@ int main(int argc, char **argv)
         buffer_print(editor.buffer);
 
         const char ch = getchar();
-        const Mapping mapping = normal_mappings[(size_t) ch];
+        const Mapping mapping = editor.escape ? escape_mappings[(size_t) ch] : normal_mappings[(size_t) ch];
+        editor.escape = false;
+
         if (mapping.editor) {
             mapping.editor();
         } else if (mapping.buffer) {
