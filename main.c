@@ -39,6 +39,7 @@ static inline Vector vector_sub(Vector a, Vector b)
 // Syntax
 typedef struct {
     const SV ident;
+    const SV comment;
     const SV *keywords;
     const SV *specials;
 } Syntax;
@@ -49,6 +50,8 @@ typedef enum {
     SYNTAX_NORMAL,
     SYNTAX_KEYWORD,
     SYNTAX_SPECIAL,
+    SYNTAX_STRING,
+    SYNTAX_COMMENT,
     COUNT_SYNTAXES
 } SyntaxType;
 
@@ -67,11 +70,31 @@ static inline bool syntax_isident(size_t syntax, char ch)
     return isalnum(ch) || ch == '_' || sv_find(syntaxes[syntax].ident, ch) != -1;
 }
 
+static inline bool isstring(char ch)
+{
+    return ch == '"' || ch == '\'';
+}
+
 SV syntax_split(size_t syntax, SV *view, SyntaxType *type)
 {
     SV word = {0};
-    bool separator = false;
-    if (syntax_isident(syntax, view->data[0])) {
+    bool found = false;
+    if (isstring(*view->data)) {
+        found = true;
+        *type = SYNTAX_STRING;
+
+        for (size_t i = 1; i < view->size; ++i) {
+            if (view->data[i] == '\\') {
+                i += 1;
+            } else if (view->data[i] == *view->data) {
+                word = sv_split_at(view, i + 1);
+                break;
+            }
+        }
+    } else if (sv_starts_with(*view, syntaxes[syntax].comment)) {
+        found = true;
+        *type = SYNTAX_COMMENT;
+    } else if (syntax_isident(syntax, *view->data)) {
         for (size_t i = 1; i < view->size; ++i) {
             if (!syntax_isident(syntax, view->data[i])) {
                 word = sv_split_at(view, i);
@@ -79,11 +102,11 @@ SV syntax_split(size_t syntax, SV *view, SyntaxType *type)
             }
         }
     } else {
-        separator = true;
+        found = true;
         *type = SYNTAX_NORMAL;
 
         for (size_t i = 1; i < view->size; ++i) {
-            if (syntax_isident(syntax, view->data[i])) {
+            if (isstring(view->data[i]) || syntax_isident(syntax, view->data[i])) {
                 word = sv_split_at(view, i);
                 break;
             }
@@ -94,7 +117,7 @@ SV syntax_split(size_t syntax, SV *view, SyntaxType *type)
         word = sv_split_at(view, view->size);
     }
 
-    if (!separator) {
+    if (!found) {
         if (sv_list_find(syntaxes[syntax].keywords, word)) {
             *type = SYNTAX_KEYWORD;
         } else if (sv_list_find(syntaxes[syntax].specials, word)) {
@@ -114,11 +137,13 @@ typedef struct {
     int bold;
 } Color;
 
-static_assert(COUNT_SYNTAXES == 3);
+static_assert(COUNT_SYNTAXES == 5);
 static const Color color_syntaxes[] = {
     [SYNTAX_NORMAL]  = {.fg = 15, .bg = -1,  .bold = 0},
     [SYNTAX_KEYWORD] = {.fg = 3,  .bg = -1,  .bold = 1},
     [SYNTAX_SPECIAL] = {.fg = 14, .bg = -1,  .bold = 0},
+    [SYNTAX_STRING]  = {.fg = 2,  .bg = -1,  .bold = 0},
+    [SYNTAX_COMMENT] = {.fg = 8,  .bg = -1,  .bold = 0},
 };
 
 #define COLOR_NORMAL  (Color) {.fg = -1, .bg = 0,   .bold = -1}

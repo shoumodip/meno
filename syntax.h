@@ -17,6 +17,7 @@ static const SV c_specials[] = {
 static const Syntax syntaxes[] = {
     {
         .ident = SVStatic("#"),
+        .comment = SVStatic("//"),
         .keywords = c_keywords,
         .specials = c_specials,
     }
