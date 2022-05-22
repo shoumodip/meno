@@ -6,8 +6,11 @@
 #include <ctype.h>
 #include <assert.h>
 
+#include <fcntl.h>
 #include <unistd.h>
 #include <termios.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 #include <sys/ioctl.h>
 
 #define INC_CAP 128
@@ -26,39 +29,18 @@ static inline bool vector_eq(Vector a, Vector b)
     return a.x == b.x && a.y == b.y;
 }
 
-// Slice
-typedef struct {
-    const char *data;
-    size_t size;
-} Slice;
-
-#define Slice(src) {.data = src, .size = sizeof(src) - 1}
-
-static inline bool slice_eq(Slice a, Slice b)
+static inline Vector vector_sub(Vector a, Vector b)
 {
-    return a.size == b.size && !memcmp(a.data, b.data, a.size);
+    return (Vector) {.x = a.x - b.x, .y = a.y - b.y};
 }
 
-static inline bool slice_has(Slice slice, char ch)
-{
-    return memchr(slice.data, ch, slice.size) != NULL;
-}
-
-static inline Slice slice_split(Slice *slice, size_t index)
-{
-    Slice result = *slice;
-    result.size = index;
-    slice->data += index;
-    slice->size -= index;
-    return result;
-}
-
+#include "sv.h"
 
 // Syntax
 typedef struct {
-    const Slice ident;
-    const Slice *keywords;
-    const Slice *specials;
+    const SV ident;
+    const SV *keywords;
+    const SV *specials;
 } Syntax;
 
 #include "syntax.h"
@@ -70,10 +52,10 @@ typedef enum {
     COUNT_SYNTAXES
 } SyntaxType;
 
-bool slice_list_find(const Slice *list, Slice pred)
+bool sv_list_find(const SV *list, SV pred)
 {
     while (list->data) {
-        if (slice_eq(*list++, pred)) {
+        if (sv_eq(*list++, pred)) {
             return true;
         }
     }
@@ -82,17 +64,17 @@ bool slice_list_find(const Slice *list, Slice pred)
 
 static inline bool syntax_isident(size_t syntax, char ch)
 {
-    return isalnum(ch) || ch == '_' || slice_has(syntaxes[syntax].ident, ch);
+    return isalnum(ch) || ch == '_' || sv_find(syntaxes[syntax].ident, ch) != -1;
 }
 
-Slice syntax_split(size_t syntax, Slice *view, SyntaxType *type)
+SV syntax_split(size_t syntax, SV *view, SyntaxType *type)
 {
-    Slice word = {0};
+    SV word = {0};
     bool separator = false;
     if (syntax_isident(syntax, view->data[0])) {
         for (size_t i = 1; i < view->size; ++i) {
             if (!syntax_isident(syntax, view->data[i])) {
-                word = slice_split(view, i);
+                word = sv_split_at(view, i);
                 break;
             }
         }
@@ -102,20 +84,20 @@ Slice syntax_split(size_t syntax, Slice *view, SyntaxType *type)
 
         for (size_t i = 1; i < view->size; ++i) {
             if (syntax_isident(syntax, view->data[i])) {
-                word = slice_split(view, i);
+                word = sv_split_at(view, i);
                 break;
             }
         }
     }
 
     if (!word.data) {
-        word = slice_split(view, view->size);
+        word = sv_split_at(view, view->size);
     }
 
     if (!separator) {
-        if (slice_list_find(syntaxes[syntax].keywords, word)) {
+        if (sv_list_find(syntaxes[syntax].keywords, word)) {
             *type = SYNTAX_KEYWORD;
-        } else if (slice_list_find(syntaxes[syntax].specials, word)) {
+        } else if (sv_list_find(syntaxes[syntax].specials, word)) {
             *type = SYNTAX_SPECIAL;
         } else {
             *type = SYNTAX_NORMAL;
@@ -245,6 +227,9 @@ typedef struct {
     bool region;
     Vector cursor;
     Vector marker;
+
+    const char *path;
+    Vector anchor;
 } Buffer;
 
 void buffer_free(Buffer *buffer)
@@ -269,6 +254,55 @@ void buffer_push(Buffer *buffer, String string)
 {
     buffer_grow(buffer);
     buffer->lines[buffer->count++] = string;
+}
+
+void buffer_open(Buffer *buffer, const char *path)
+{
+    buffer_free(buffer);
+    buffer->path = path;
+
+    const int fd = open(path, O_RDONLY);
+    if (fd == -1) {
+        return;
+    }
+
+    struct stat statbuf;
+    if (fstat(fd, &statbuf) == -1) {
+        close(fd);
+        return;
+    }
+
+    SV contents = {0};
+    contents.size = statbuf.st_size;
+
+    contents.data = mmap(NULL, contents.size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (contents.data == MAP_FAILED) {
+        close(fd);
+        return;
+    }
+
+    char *head = (char *) contents.data;
+    while (contents.size) {
+        const SV line = sv_split(&contents, '\n');
+        buffer_push(buffer, string(line.data, line.size));
+    }
+
+    munmap(head, statbuf.st_size);
+}
+
+void buffer_anchor_fix(Buffer *buffer)
+{
+    if (buffer->cursor.y >= buffer->anchor.y + term.size.y) {
+        buffer->anchor.y += 1;
+    } else if (buffer->cursor.y < buffer->anchor.y) {
+        buffer->anchor.y -= 1;
+    }
+
+    if (buffer->cursor.x >= buffer->anchor.x + term.size.x) {
+        buffer->anchor.x += 1;
+    } else if (buffer->cursor.x < buffer->anchor.x) {
+        buffer->anchor.x -= 1;
+    }
 }
 
 void buffer_insert(Buffer *buffer, char ch)
@@ -297,6 +331,8 @@ void buffer_insert(Buffer *buffer, char ch)
 
         prev->size = buffer->cursor.x;
         buffer->cursor.x = 0;
+
+        buffer_anchor_fix(buffer);
     }
 }
 
@@ -305,6 +341,7 @@ void buffer_backward_char(Buffer *buffer)
     if (buffer->count) {
         if (buffer->cursor.x) {
             buffer->cursor.x--;
+            buffer_anchor_fix(buffer);
         }
     }
 }
@@ -314,6 +351,7 @@ void buffer_forward_char(Buffer *buffer)
     if (buffer->count) {
         if (buffer->cursor.x < buffer->lines[buffer->cursor.y].size) {
             buffer->cursor.x++;
+            buffer_anchor_fix(buffer);
         }
     }
 }
@@ -330,6 +368,7 @@ void buffer_previous_line(Buffer *buffer)
     if (buffer->cursor.y) {
         buffer->cursor.y--;
         buffer_cursor_fix(buffer);
+        buffer_anchor_fix(buffer);
     }
 }
 
@@ -338,6 +377,7 @@ void buffer_next_line(Buffer *buffer)
     if (buffer->cursor.y + 1 < buffer->count) {
         buffer->cursor.y++;
         buffer_cursor_fix(buffer);
+        buffer_anchor_fix(buffer);
     }
 }
 
@@ -363,17 +403,26 @@ void buffer_print(Buffer buffer)
     }
 
     Vector pen;
-    for (pen.y = 0; pen.y < buffer.count; ++pen.y) {
+    bool first = true;
+    const size_t space = MIN(buffer.count, buffer.anchor.y + term.size.y);
+    for (pen.y = buffer.anchor.y; pen.y < space; ++pen.y) {
+        if (first) {
+            first = false;
+        } else {
+            putchar('\n');
+        }
         pen.x = 0;
 
-        Slice view = {
+        SV view = {
             .data = buffer.lines[pen.y].data,
             .size = buffer.lines[pen.y].size
         };
 
+        view.size = MIN(view.size, buffer.anchor.x + term.size.x);
+
         while (view.size) {
             SyntaxType type;
-            const Slice word = syntax_split(0, &view, &type);
+            const SV word = syntax_split(0, &view, &type);
 
             if (type) term_color(color_syntaxes[type]);
             for (size_t i = 0; i < word.size; ++i) {
@@ -381,7 +430,9 @@ void buffer_print(Buffer buffer)
                     term_color(COLOR_VISUAL);
                 }
 
-                putchar(word.data[i]);
+                if (pen.x >= buffer.anchor.x) {
+                    putchar(word.data[i]);
+                }
 
                 if (buffer.region && vector_eq(pen, end)) {
                     term_color(COLOR_NORMAL);
@@ -399,11 +450,9 @@ void buffer_print(Buffer buffer)
         if (buffer.region && vector_eq(pen, end)) {
             term_color(COLOR_NORMAL);
         }
-
-        putchar('\n');
     }
 
-    term_move(buffer.cursor);
+    term_move(vector_sub(buffer.cursor, buffer.anchor));
 }
 
 void buffer_toggle_region(Buffer *buffer)
@@ -498,9 +547,13 @@ static const Mapping normal_mappings[KEY_MAX] = {
     [127]       = {.delete = buffer_backward_char},
 };
 
-int main(void)
+int main(int argc, char **argv)
 {
     term_init();
+
+    if (argc == 2) {
+        buffer_open(&editor.buffer, argv[1]);
+    }
 
     while (!editor.quit) {
         buffer_print(editor.buffer);

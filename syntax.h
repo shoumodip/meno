@@ -1,22 +1,22 @@
 #ifndef SYNTAX_H
 #define SYNTAX_H
 
-static const Slice c_keywords[] = {
-    Slice("if"),
-    Slice("else"),
-    Slice("return"),
+static const SV c_keywords[] = {
+    SVStatic("if"),
+    SVStatic("else"),
+    SVStatic("return"),
     {0}
 };
 
-static const Slice c_specials[] = {
-    Slice("#include"),
-    Slice("#define"),
+static const SV c_specials[] = {
+    SVStatic("#include"),
+    SVStatic("#define"),
     {0}
 };
 
 static const Syntax syntaxes[] = {
     {
-        .ident = Slice("#"),
+        .ident = SVStatic("#"),
         .keywords = c_keywords,
         .specials = c_specials,
     }
