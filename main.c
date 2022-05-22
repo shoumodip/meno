@@ -10,50 +10,58 @@
 #include <termios.h>
 #include <sys/ioctl.h>
 
-#include "sv.h"
-
 #define INC_CAP 128
 #define KEY_MAX 128
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
+// Vector
 typedef struct {
     size_t x, y;
 } Vector;
 
-bool vector_eq(Vector a, Vector b)
+static inline bool vector_eq(Vector a, Vector b)
 {
     return a.x == b.x && a.y == b.y;
 }
 
+// Slice
+typedef struct {
+    const char *data;
+    size_t size;
+} Slice;
+
+#define Slice(src) {.data = src, .size = sizeof(src) - 1}
+
+static inline bool slice_eq(Slice a, Slice b)
+{
+    return a.size == b.size && !memcmp(a.data, b.data, a.size);
+}
+
+static inline bool slice_has(Slice slice, char ch)
+{
+    return memchr(slice.data, ch, slice.size) != NULL;
+}
+
+static inline Slice slice_split(Slice *slice, size_t index)
+{
+    Slice result = *slice;
+    result.size = index;
+    slice->data += index;
+    slice->size -= index;
+    return result;
+}
+
+
 // Syntax
 typedef struct {
-    const SV ident;
-    const SV *keywords;
-    const SV *specials;
+    const Slice ident;
+    const Slice *keywords;
+    const Slice *specials;
 } Syntax;
 
-static const SV c_keywords[] = {
-    SVStatic("if"),
-    SVStatic("else"),
-    SVStatic("return"),
-    {0}
-};
-
-static const SV c_specials[] = {
-    SVStatic("#include"),
-    SVStatic("#define"),
-    {0}
-};
-
-static const Syntax syntaxes[] = {
-    {
-        .ident = SVStatic("#"),
-        .keywords = c_keywords,
-        .specials = c_specials,
-    }
-};
+#include "syntax.h"
 
 typedef enum {
     SYNTAX_NORMAL,
@@ -62,49 +70,56 @@ typedef enum {
     COUNT_SYNTAXES
 } SyntaxType;
 
-bool svlist_find(const SV *list, SV pred)
+bool slice_list_find(const Slice *list, Slice pred)
 {
-    while (list->source) {
-        if (sv_eq(*list++, pred)) {
+    while (list->data) {
+        if (slice_eq(*list++, pred)) {
             return true;
         }
     }
     return false;
 }
 
-bool syntax_isident(size_t syntax, char ch)
+static inline bool syntax_isident(size_t syntax, char ch)
 {
-    return isalnum(ch) || ch == '_' || sv_find(syntaxes[syntax].ident, ch) != -1;
+    return isalnum(ch) || ch == '_' || slice_has(syntaxes[syntax].ident, ch);
 }
 
-SV syntax_split(size_t syntax, SV *view, SyntaxType *type)
+Slice syntax_split(size_t syntax, Slice *view, SyntaxType *type)
 {
-    SV word = {0};
-    if (syntax_isident(syntax, view->source[0])) {
-        for (size_t i = 1; i < view->length; ++i) {
-            if (!syntax_isident(syntax, view->source[i])) {
-                word = sv_split_at(view, i);
+    Slice word = {0};
+    bool separator = false;
+    if (syntax_isident(syntax, view->data[0])) {
+        for (size_t i = 1; i < view->size; ++i) {
+            if (!syntax_isident(syntax, view->data[i])) {
+                word = slice_split(view, i);
                 break;
             }
         }
     } else {
-        for (size_t i = 1; i < view->length; ++i) {
-            if (syntax_isident(syntax, view->source[i])) {
-                word = sv_split_at(view, i);
+        separator = true;
+        *type = SYNTAX_NORMAL;
+
+        for (size_t i = 1; i < view->size; ++i) {
+            if (syntax_isident(syntax, view->data[i])) {
+                word = slice_split(view, i);
                 break;
             }
         }
-    }
-    if (!word.source) {
-        word = sv_split_at(view, view->length);
     }
 
-    if (svlist_find(syntaxes[syntax].keywords, word)) {
-        *type = SYNTAX_KEYWORD;
-    } else if (svlist_find(syntaxes[syntax].specials, word)) {
-        *type = SYNTAX_SPECIAL;
-    } else {
-        *type = SYNTAX_NORMAL;
+    if (!word.data) {
+        word = slice_split(view, view->size);
+    }
+
+    if (!separator) {
+        if (slice_list_find(syntaxes[syntax].keywords, word)) {
+            *type = SYNTAX_KEYWORD;
+        } else if (slice_list_find(syntaxes[syntax].specials, word)) {
+            *type = SYNTAX_SPECIAL;
+        } else {
+            *type = SYNTAX_NORMAL;
+        }
     }
 
     return word;
@@ -114,18 +129,18 @@ SV syntax_split(size_t syntax, SV *view, SyntaxType *type)
 typedef struct {
     int fg;
     int bg;
-    bool bold;
+    int bold;
 } Color;
 
 static_assert(COUNT_SYNTAXES == 3);
 static const Color color_syntaxes[] = {
-    [SYNTAX_NORMAL]  = {.fg = 15, .bg = 0,   .bold = false},
-    [SYNTAX_KEYWORD] = {.fg = 3,  .bg = -1,  .bold = true},
-    [SYNTAX_SPECIAL] = {.fg = 14, .bg = -1,  .bold = false},
+    [SYNTAX_NORMAL]  = {.fg = 15, .bg = -1,  .bold = 0},
+    [SYNTAX_KEYWORD] = {.fg = 3,  .bg = -1,  .bold = 1},
+    [SYNTAX_SPECIAL] = {.fg = 14, .bg = -1,  .bold = 0},
 };
 
-#define COLOR_NORMAL  (color_syntaxes[SYNTAX_NORMAL])
-#define COLOR_VISUAL  (Color) {.fg = -1, .bg = 239, .bold = false}
+#define COLOR_NORMAL  (Color) {.fg = -1, .bg = 0,   .bold = -1}
+#define COLOR_VISUAL  (Color) {.fg = -1, .bg = 239, .bold = -1}
 
 typedef struct {
     struct termios save;
@@ -168,10 +183,10 @@ void term_move(Vector cursor)
 
 void term_color(Color color)
 {
-    if (color.bold) {
+    if (color.bold == 1) {
         printf("\x1b[1m");
-    } else {
-        printf("\x1b[0m");
+    } else if (color.bold == 0) {
+        printf("\x1b[22m");
     }
 
     if (color.bg != -1) {
@@ -351,18 +366,22 @@ void buffer_print(Buffer buffer)
     for (pen.y = 0; pen.y < buffer.count; ++pen.y) {
         pen.x = 0;
 
-        SV view = sv(buffer.lines[pen.y].data, buffer.lines[pen.y].size);
-        while (view.length) {
+        Slice view = {
+            .data = buffer.lines[pen.y].data,
+            .size = buffer.lines[pen.y].size
+        };
+
+        while (view.size) {
             SyntaxType type;
-            const SV word = syntax_split(0, &view, &type);
+            const Slice word = syntax_split(0, &view, &type);
 
             if (type) term_color(color_syntaxes[type]);
-            for (size_t i = 0; i < word.length; ++i) {
+            for (size_t i = 0; i < word.size; ++i) {
                 if (buffer.region && vector_eq(pen, start)) {
                     term_color(COLOR_VISUAL);
                 }
 
-                putchar(word.source[i]);
+                putchar(word.data[i]);
 
                 if (buffer.region && vector_eq(pen, end)) {
                     term_color(COLOR_NORMAL);
@@ -370,7 +389,7 @@ void buffer_print(Buffer buffer)
 
                 pen.x++;
             }
-            if (type) term_color(COLOR_NORMAL);
+            if (type) term_color(color_syntaxes[SYNTAX_NORMAL]);
         }
 
         if (buffer.region && vector_eq(pen, start)) {
@@ -474,7 +493,7 @@ static const Mapping normal_mappings[KEY_MAX] = {
     [CTRL('f')] = {.buffer = buffer_forward_char},
     [CTRL('p')] = {.buffer = buffer_previous_line},
     [CTRL('n')] = {.buffer = buffer_next_line},
-    [CTRL(' ')] = {.buffer = buffer_toggle_region},
+    [CTRL('v')] = {.buffer = buffer_toggle_region},
     [CTRL('d')] = {.delete = buffer_forward_char},
     [127]       = {.delete = buffer_backward_char},
 };
