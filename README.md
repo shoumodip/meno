@@ -1,5 +1,5 @@
 # Meno
-![Screenshot](img/screenshot.png)
+![Meno](img/meno.png)
 
 A WIP Text Editor in C
 
