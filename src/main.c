@@ -311,6 +311,8 @@ typedef struct {
     const char *path;
     Vector anchor;
     size_t syntax;
+
+    bool modified;
 } Buffer;
 
 void buffer_free(Buffer *buffer)
@@ -371,6 +373,23 @@ void buffer_open(Buffer *buffer, const char *path)
     munmap(head, statbuf.st_size);
 }
 
+void buffer_save(Buffer *buffer)
+{
+    // TODO ask for file path if buffer is not associated with a file
+    if (buffer->path && buffer->modified) {
+        FILE *output = fopen(buffer->path, "w");
+        assert(output);
+
+        for (size_t i = 0; i < buffer->count; ++i) {
+            const String line = buffer->lines[i];
+            fprintf(output, "%.*s\n", (int) line.size, line.data);
+        }
+
+        fclose(output);
+        buffer->modified = false;
+    }
+}
+
 void buffer_anchor_fix(Buffer *buffer)
 {
     const Vector limit = vector_add(buffer->anchor, term.size);
@@ -390,6 +409,7 @@ void buffer_anchor_fix(Buffer *buffer)
 
 void buffer_insert(Buffer *buffer, char ch)
 {
+    buffer->modified = true;
     buffer_grow(buffer);
 
     if (buffer->count == 0) {
@@ -665,6 +685,7 @@ void buffer_delete(Buffer *buffer, BufferAction motion)
         return;
     }
 
+    buffer->modified = true;
     if (!buffer->region) {
         buffer->marker = buffer->cursor;
         motion(buffer);
@@ -817,6 +838,7 @@ static const Mapping normal_mappings[KEY_MAX] = {
     [CTRL('c')] = {.editor = editor_quit},
     [CTRL('s')] = {.editor = editor_search_forward},
     [CTRL('r')] = {.editor = editor_search_backward},
+
     [27] = {.editor = editor_escape_map},
 
     [CTRL('b')] = {.buffer = buffer_backward_char},
@@ -826,6 +848,8 @@ static const Mapping normal_mappings[KEY_MAX] = {
     [CTRL('v')] = {.buffer = buffer_toggle_region},
     [CTRL('d')] = {.delete = buffer_forward_char},
     [127]       = {.delete = buffer_backward_char},
+
+    [CTRL('w')] = {.buffer = buffer_save},
 };
 
 static const Mapping escape_mappings[KEY_MAX] = {
