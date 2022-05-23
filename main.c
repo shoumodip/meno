@@ -24,6 +24,8 @@ typedef struct {
     size_t x, y;
 } Vector;
 
+#define Vector(x, y) (Vector) {x, y}
+
 static inline bool vector_eq(Vector a, Vector b)
 {
     return a.x == b.x && a.y == b.y;
@@ -151,8 +153,11 @@ static const Color color_syntaxes[] = {
     [SYNTAX_COMMENT] = {.fg = 8,  .bg = -1,  .bold = 0},
 };
 
-#define COLOR_NORMAL  (Color) {.fg = -1, .bg = 0,   .bold = -1}
-#define COLOR_VISUAL  (Color) {.fg = -1, .bg = 239, .bold = -1}
+#define COLOR_NORMAL (Color) {.fg = -1, .bg = 0,   .bold = -1}
+#define COLOR_VISUAL (Color) {.fg = -1, .bg = 239, .bold = -1}
+#define COLOR_PROMPT (Color) {.fg = 12, .bg = -1,  .bold = 1}
+#define COLOR_SEARCH (Color) {.fg = 0,  .bg = 15,  .bold = 0}
+#define COLOR_FAILED (Color) {.fg = 0,  .bg = 9,   .bold = 0}
 
 typedef struct {
     struct termios save;
@@ -173,7 +178,7 @@ void term_init(void)
     struct winsize size;
     assert(ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) != -1);
     term.size.x = size.ws_col;
-    term.size.y = size.ws_row;
+    term.size.y = size.ws_row - 1;
 }
 
 void term_clear(void)
@@ -190,6 +195,12 @@ void term_reset(void)
 void term_move(Vector cursor)
 {
     printf("\x1b[%zu;%zuH", cursor.y + 1, cursor.x + 1);
+    fflush(stdout);
+}
+
+void term_color_reset(void)
+{
+    printf("\x1b[0m");
     fflush(stdout);
 }
 
@@ -246,6 +257,45 @@ void string_insert(String *string, size_t index, const char *data, size_t size)
     memmove(string->data + index + 1, string->data + index, string->size - index);
     memcpy(string->data + index, data, size);
     string->size += size;
+}
+
+bool memieq(const char *a, const char *b, size_t size)
+{
+    for (size_t i = 0; i < size; ++i) {
+        if (tolower(a[i]) != tolower(b[i])) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool string_search_forward(String string, String query, size_t *position)
+{
+    if (string.size >= query.size) {
+        for (size_t i = *position; i <= string.size - query.size; ++i) {
+            if (memieq(string.data + i, query.data, query.size)) {
+                *position = i;
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+bool string_search_backward(String string, String query, size_t *position)
+{
+    if (string.size >= query.size) {
+        for (size_t i = *position + 1; i > 0; --i) {
+            if (memieq(string.data + i - 1, query.data, query.size)) {
+                *position = i - 1;
+                return true;
+            }
+        }
+    }
+
+    return false;
 }
 
 // Buffer
@@ -657,11 +707,71 @@ void buffer_delete(Buffer *buffer, BufferAction motion)
     buffer->cursor = start;
 }
 
+bool buffer_search(Buffer *buffer, String query, bool forward)
+{
+    if (forward) {
+        size_t x = buffer->cursor.x + 1;
+
+        for (size_t y = buffer->cursor.y; y < buffer->count; ++y) {
+            if (string_search_forward(buffer->lines[y], query, &x)) {
+                buffer->cursor = Vector(x, y);
+                return true;
+            }
+
+            if (y == buffer->cursor.y) {
+                x = 0;
+            }
+        }
+
+        for (size_t y = 0; y <= buffer->cursor.y; ++y) {
+            if (string_search_forward(buffer->lines[y], query, &x)) {
+                buffer->cursor = Vector(x, y);
+                return true;
+            }
+        }
+    } else {
+        size_t x = buffer->cursor.x;
+        if (x) x--;
+
+        for (size_t y = buffer->cursor.y + 1; y > 0; --y) {
+            const String line = buffer->lines[y - 1];
+
+            if (y <= buffer->cursor.y) {
+                x = line.size;
+            }
+
+            if (string_search_backward(line, query, &x)) {
+                buffer->cursor = Vector(x, y - 1);
+                return true;
+            }
+        }
+
+        for (size_t y = buffer->count; y > buffer->cursor.y; --y) {
+            const String line = buffer->lines[y - 1];
+            x = line.size;
+
+            if (string_search_backward(line, query, &x)) {
+                buffer->cursor = Vector(x, y - 1);
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 // Editor
 typedef struct {
     bool quit;
     bool escape;
     Buffer buffer;
+
+    bool search;
+    bool search_found;
+    String search_query;
+    Vector search_start;
+    Vector search_current;
+    bool search_forward;
 } Editor;
 
 static Editor editor;
@@ -669,6 +779,25 @@ static Editor editor;
 void editor_quit(void)
 {
     editor.quit = true;
+}
+
+void editor_search(bool forward)
+{
+    editor.search_start = editor.buffer.cursor;
+    editor.search_current = editor.search_start;
+    editor.search_forward = forward;
+    editor.search_query.size = 0;
+    editor.search = true;
+}
+
+void editor_search_forward(void)
+{
+    editor_search(true);
+}
+
+void editor_search_backward(void)
+{
+    editor_search(false);
 }
 
 void editor_escape_map(void)
@@ -685,8 +814,11 @@ typedef struct {
 } Mapping;
 
 static const Mapping normal_mappings[KEY_MAX] = {
-    [CTRL('q')] = {.editor = editor_quit},
+    [CTRL('c')] = {.editor = editor_quit},
+    [CTRL('s')] = {.editor = editor_search_forward},
+    [CTRL('r')] = {.editor = editor_search_backward},
     [27] = {.editor = editor_escape_map},
+
     [CTRL('b')] = {.buffer = buffer_backward_char},
     [CTRL('f')] = {.buffer = buffer_forward_char},
     [CTRL('p')] = {.buffer = buffer_previous_line},
@@ -701,6 +833,8 @@ static const Mapping escape_mappings[KEY_MAX] = {
     ['f'] = {.buffer = buffer_forward_word},
     ['p'] = {.buffer = buffer_previous_para},
     ['n'] = {.buffer = buffer_next_para},
+    ['d'] = {.delete = buffer_forward_word},
+    [127] = {.delete = buffer_backward_word},
 };
 
 int main(int argc, char **argv)
@@ -714,22 +848,103 @@ int main(int argc, char **argv)
     while (!editor.quit) {
         buffer_print(editor.buffer);
 
-        const char ch = getchar();
-        const Mapping mapping = editor.escape ? escape_mappings[(size_t) ch] : normal_mappings[(size_t) ch];
-        editor.escape = false;
+        if (editor.search) {
+            term_move(Vector(0, term.size.y + 1));
+            term_color(COLOR_PROMPT);
+            printf("Search: ");
 
-        if (mapping.editor) {
-            mapping.editor();
-        } else if (mapping.buffer) {
-            mapping.buffer(&editor.buffer);
-        } else if (mapping.delete) {
-            buffer_delete(&editor.buffer, mapping.delete);
-        } else if (isprint(ch) || ch == '\r') {
-            buffer_insert(&editor.buffer, ch);
+            if (editor.search_found) {
+                term_color_reset();
+            } else {
+                term_color(COLOR_FAILED);
+            }
+
+            fprintf(stdout, "%.*s", (int) editor.search_query.size, editor.search_query.data);
+
+            if (!editor.search_found) {
+                term_color_reset();
+            }
+
+            term_move(vector_sub(editor.buffer.cursor, editor.buffer.anchor));
+
+            if (editor.search_found) {
+                term_color(COLOR_SEARCH);
+                printf("%.*s", (int) editor.search_query.size,
+                       editor.buffer.lines[editor.buffer.cursor.y].data + editor.buffer.cursor.x);
+                term_color_reset();
+                term_move(vector_sub(editor.buffer.cursor, editor.buffer.anchor));
+            }
+        }
+
+        const char ch = getchar();
+        if (editor.search) {
+            int move_more = 0;
+
+            switch (ch) {
+            case CTRL('c'):
+            case 27:
+                editor.buffer.cursor = editor.search_start;
+                editor.search = false;
+                break;
+
+            case '\r':
+                editor.search = false;
+                break;
+
+            case 127:
+                if (editor.search_query.size) {
+                    editor.search_query.size--;
+                }
+                editor.search_current = editor.search_start;
+                break;
+
+            case CTRL('s'):
+                move_more = 1;
+                break;
+
+            case CTRL('r'):
+                move_more = -1;
+                break;
+
+            default:
+                if (isprint(ch)) {
+                    string_insert(&editor.search_query, editor.search_query.size, &ch, 1);
+                }
+                editor.search_current = editor.search_start;
+                break;
+            }
+
+            if (editor.search) {
+                editor.buffer.cursor = editor.search_current;
+
+                if (editor.search_found && move_more) {
+                    buffer_search(&editor.buffer, editor.search_query, move_more == 1);
+                    editor.search_current = editor.buffer.cursor;
+                }
+
+                editor.search_found = buffer_search(&editor.buffer, editor.search_query, editor.search_forward);
+            }
+
+            buffer_anchor_snap(&editor.buffer);
+            buffer_anchor_fix(&editor.buffer);
+        } else {
+            const Mapping mapping = editor.escape ? escape_mappings[(size_t) ch] : normal_mappings[(size_t) ch];
+            editor.escape = false;
+
+            if (mapping.editor) {
+                mapping.editor();
+            } else if (mapping.buffer) {
+                mapping.buffer(&editor.buffer);
+            } else if (mapping.delete) {
+                buffer_delete(&editor.buffer, mapping.delete);
+            } else if (isprint(ch) || ch == '\r') {
+                buffer_insert(&editor.buffer, ch);
+            }
         }
     }
 
     buffer_free(&editor.buffer);
+    string_free(&editor.search_query);
     term_reset();
     return 0;
 }
