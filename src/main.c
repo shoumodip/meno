@@ -849,6 +849,16 @@ int main(int argc, char **argv)
         buffer_print(editor.buffer);
 
         if (editor.search) {
+            term_move(vector_sub(editor.buffer.cursor, editor.buffer.anchor));
+
+            if (editor.search_found) {
+                term_color(COLOR_SEARCH);
+                printf("%.*s", (int) editor.search_query.size,
+                       editor.buffer.lines[editor.buffer.cursor.y].data + editor.buffer.cursor.x);
+            }
+
+            term_color_reset();
+
             term_move(Vector(0, term.size.y + 1));
             term_color(COLOR_PROMPT);
             printf("Search: ");
@@ -860,20 +870,7 @@ int main(int argc, char **argv)
             }
 
             fprintf(stdout, "%.*s", (int) editor.search_query.size, editor.search_query.data);
-
-            if (!editor.search_found) {
-                term_color_reset();
-            }
-
-            term_move(vector_sub(editor.buffer.cursor, editor.buffer.anchor));
-
-            if (editor.search_found) {
-                term_color(COLOR_SEARCH);
-                printf("%.*s", (int) editor.search_query.size,
-                       editor.buffer.lines[editor.buffer.cursor.y].data + editor.buffer.cursor.x);
-                term_color_reset();
-                term_move(vector_sub(editor.buffer.cursor, editor.buffer.anchor));
-            }
+            term_color_reset();
         }
 
         const char ch = getchar();
