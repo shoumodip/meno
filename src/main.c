@@ -804,11 +804,11 @@ void editor_quit(void)
 
 String editor_prompt(const char *prompt, void (*callback)(void *userdata), void *userdata)
 {
-    memset(&editor.search, 0, sizeof(String));
     editor.query.size = 0;
 
     while (true) {
         term_move(Vector(0, term.size.y + 1));
+        fprintf(stdout, "\x1b[J");
         term_color(COLOR_PROMPT);
         printf(prompt);
         term_color_reset();
@@ -876,6 +876,8 @@ void editor_search_callback(void *userdata)
 
 void editor_search(bool forward)
 {
+    editor.search.size = 0;
+
     Search search = {
         .start = editor.buffer.cursor,
         .found = false,
@@ -883,9 +885,8 @@ void editor_search(bool forward)
     };
 
     const String query = editor_prompt("Search: ", editor_search_callback, &search);
-
-    if (query.size) {
-        editor.search = query;
+    if (query.size && !vector_eq(editor.buffer.cursor, search.start)) {
+        string_insert(&editor.search, 0, query.data, query.size);
     } else {
         editor.buffer.cursor = search.start;
     }
@@ -918,6 +919,69 @@ void editor_search_further_backward(void)
     editor_search_further(false);
 }
 
+char editor_prompt_char(const char *prompt, const char *valid)
+{
+    term_move(Vector(0, term.size.y + 1));
+    fprintf(stdout, "\x1b[J");
+    term_color(COLOR_PROMPT);
+    printf("%s (%s): ", prompt, valid);
+    term_color_reset();
+
+    while (true) {
+        const char ch = tolower(getchar());
+        if (ch == 27 || ch == CTRL('c')) {
+            return '\0';
+        } else if (strchr(valid, ch)) {
+            return ch;
+        }
+    }
+}
+
+static String search_save;
+
+void editor_replace(void)
+{
+    search_save.size = 0;
+    string_insert(&search_save, 0, editor.search.data, editor.search.size);
+
+    editor_search_forward();
+
+    String replace_with = editor_prompt("Replace: ", NULL, NULL);
+    bool replace_all = false;
+    while (editor.search.size) {
+        buffer_print(editor.buffer);
+        term_color(COLOR_SEARCH);
+        printf("%.*s", (int) editor.query.size, editor.buffer.lines[editor.buffer.cursor.y].data + editor.buffer.cursor.x);
+        term_color_reset();
+
+        bool replace = true;
+        if (!replace_all) {
+            const char ch = tolower(editor_prompt_char("Replace", "ynaq"));
+            if (ch && ch != 'q') {
+                if (ch == 'a') {
+                    replace_all = true;
+                } else {
+                    replace = ch == 'y';
+                }
+            } else {
+                break;
+            }
+        }
+
+        if (replace) {
+            memcpy(editor.buffer.lines[editor.buffer.cursor.y].data + editor.buffer.cursor.x,
+                   replace_with.data, replace_with.size);
+        }
+
+        if (!buffer_search(&editor.buffer, editor.search, true)) {
+            break;
+        }
+    }
+
+    editor.search.size = 0;
+    string_insert(&editor.search, 0, search_save.data, search_save.size);
+}
+
 void editor_escape_map(void)
 {
     editor.escape = true;
@@ -935,6 +999,7 @@ static const Mapping normal_mappings[KEY_MAX] = {
     [CTRL('c')] = {.editor = editor_quit},
     [CTRL('s')] = {.editor = editor_search_forward},
     [CTRL('r')] = {.editor = editor_search_backward},
+    [CTRL('x')] = {.editor = editor_replace},
 
     [27] = {.editor = editor_escape_map},
 
@@ -988,7 +1053,9 @@ int main(int argc, char **argv)
     }
 
     buffer_free(&editor.buffer);
+    string_free(&editor.search);
     string_free(&editor.query);
+    string_free(&search_save);
     term_reset();
     return 0;
 }
