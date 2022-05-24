@@ -736,7 +736,7 @@ bool buffer_search(Buffer *buffer, String query, bool forward)
         for (size_t y = buffer->cursor.y; y < buffer->count; ++y) {
             if (string_search_forward(buffer->lines[y], query, &x)) {
                 buffer->cursor = Vector(x, y);
-                return true;
+                goto found;
             }
 
             if (y == buffer->cursor.y) {
@@ -747,7 +747,7 @@ bool buffer_search(Buffer *buffer, String query, bool forward)
         for (size_t y = 0; y <= buffer->cursor.y; ++y) {
             if (string_search_forward(buffer->lines[y], query, &x)) {
                 buffer->cursor = Vector(x, y);
-                return true;
+                goto found;
             }
         }
     } else {
@@ -763,7 +763,7 @@ bool buffer_search(Buffer *buffer, String query, bool forward)
 
             if (string_search_backward(line, query, &x)) {
                 buffer->cursor = Vector(x, y - 1);
-                return true;
+                goto found;
             }
         }
 
@@ -773,12 +773,17 @@ bool buffer_search(Buffer *buffer, String query, bool forward)
 
             if (string_search_backward(line, query, &x)) {
                 buffer->cursor = Vector(x, y - 1);
-                return true;
+                goto found;
             }
         }
     }
 
     return false;
+
+found:
+    buffer_anchor_snap(buffer);
+    buffer_anchor_fix(buffer);
+    return true;
 }
 
 // Editor
@@ -786,13 +791,8 @@ typedef struct {
     bool quit;
     bool escape;
     Buffer buffer;
-
-    bool search;
-    bool search_found;
-    String search_query;
-    Vector search_start;
-    Vector search_current;
-    bool search_forward;
+    String query;
+    String search;
 } Editor;
 
 static Editor editor;
@@ -802,13 +802,100 @@ void editor_quit(void)
     editor.quit = true;
 }
 
+String editor_prompt(const char *prompt, void (*callback)(void *userdata), void *userdata)
+{
+    memset(&editor.search, 0, sizeof(String));
+    editor.query.size = 0;
+
+    while (true) {
+        term_move(Vector(0, term.size.y + 1));
+        term_color(COLOR_PROMPT);
+        printf(prompt);
+        term_color_reset();
+        fprintf(stdout, "%.*s", (int) editor.query.size, editor.query.data);
+        term_color_reset();
+
+        if (callback) callback(userdata);
+
+        const char ch = getchar();
+        switch (ch) {
+        case 27:
+        case CTRL('c'):
+            return (String) {0};
+
+        case '\r':
+            return editor.query;
+
+        case 127:
+            if (editor.query.size) {
+                editor.query.size--;
+            }
+            break;
+
+        default:
+            if (isprint(ch)) {
+                string_insert(&editor.query, editor.query.size, &ch, 1);
+            }
+            break;
+        }
+    }
+}
+
+typedef struct {
+    Vector start;
+    bool forward;
+    bool found;
+} Search;
+
+void editor_search_callback(void *userdata)
+{
+    Search *search = (Search *) userdata;
+    editor.buffer.cursor = search->start;
+    search->found = buffer_search(&editor.buffer, editor.query, search->forward);
+    buffer_print(editor.buffer);
+
+    if (search->found) {
+        term_color(COLOR_SEARCH);
+        printf("%.*s", (int) editor.query.size, editor.buffer.lines[editor.buffer.cursor.y].data + editor.buffer.cursor.x);
+        term_color_reset();
+    }
+
+    term_move(Vector(0, term.size.y + 1));
+    term_color(COLOR_PROMPT);
+    printf("Search: ");
+
+    if (search->found) {
+        term_color_reset();
+    } else {
+        term_color(COLOR_FAILED);
+    }
+
+    fprintf(stdout, "%.*s", (int) editor.query.size, editor.query.data);
+    term_color_reset();
+}
+
 void editor_search(bool forward)
 {
-    editor.search_start = editor.buffer.cursor;
-    editor.search_current = editor.search_start;
-    editor.search_forward = forward;
-    editor.search_query.size = 0;
-    editor.search = true;
+    Search search = {
+        .start = editor.buffer.cursor,
+        .found = false,
+        .forward = forward
+    };
+
+    const String query = editor_prompt("Search: ", editor_search_callback, &search);
+
+    if (query.size) {
+        editor.search = query;
+    } else {
+        editor.buffer.cursor = search.start;
+    }
+}
+
+void editor_search_further(bool forward)
+{
+    if (editor.search.size) {
+        buffer_search(&editor.buffer, editor.search, forward);
+    }
 }
 
 void editor_search_forward(void)
@@ -816,9 +903,19 @@ void editor_search_forward(void)
     editor_search(true);
 }
 
+void editor_search_further_forward(void)
+{
+    editor_search_further(true);
+}
+
 void editor_search_backward(void)
 {
     editor_search(false);
+}
+
+void editor_search_further_backward(void)
+{
+    editor_search_further(false);
 }
 
 void editor_escape_map(void)
@@ -853,6 +950,9 @@ static const Mapping normal_mappings[KEY_MAX] = {
 };
 
 static const Mapping escape_mappings[KEY_MAX] = {
+    ['s'] = {.editor = editor_search_further_forward},
+    ['r'] = {.editor = editor_search_further_backward},
+
     ['b'] = {.buffer = buffer_backward_word},
     ['f'] = {.buffer = buffer_forward_word},
     ['p'] = {.buffer = buffer_previous_para},
@@ -872,100 +972,23 @@ int main(int argc, char **argv)
     while (!editor.quit) {
         buffer_print(editor.buffer);
 
-        if (editor.search) {
-            term_move(vector_sub(editor.buffer.cursor, editor.buffer.anchor));
-
-            if (editor.search_found) {
-                term_color(COLOR_SEARCH);
-                printf("%.*s", (int) editor.search_query.size,
-                       editor.buffer.lines[editor.buffer.cursor.y].data + editor.buffer.cursor.x);
-            }
-
-            term_color_reset();
-
-            term_move(Vector(0, term.size.y + 1));
-            term_color(COLOR_PROMPT);
-            printf("Search: ");
-
-            if (editor.search_found) {
-                term_color_reset();
-            } else {
-                term_color(COLOR_FAILED);
-            }
-
-            fprintf(stdout, "%.*s", (int) editor.search_query.size, editor.search_query.data);
-            term_color_reset();
-        }
-
         const char ch = getchar();
-        if (editor.search) {
-            int move_more = 0;
+        const Mapping mapping = editor.escape ? escape_mappings[(size_t) ch] : normal_mappings[(size_t) ch];
+        editor.escape = false;
 
-            switch (ch) {
-            case CTRL('c'):
-            case 27:
-                editor.buffer.cursor = editor.search_start;
-                editor.search = false;
-                break;
-
-            case '\r':
-                editor.search = false;
-                break;
-
-            case 127:
-                if (editor.search_query.size) {
-                    editor.search_query.size--;
-                }
-                editor.search_current = editor.search_start;
-                break;
-
-            case CTRL('s'):
-                move_more = 1;
-                break;
-
-            case CTRL('r'):
-                move_more = -1;
-                break;
-
-            default:
-                if (isprint(ch)) {
-                    string_insert(&editor.search_query, editor.search_query.size, &ch, 1);
-                }
-                editor.search_current = editor.search_start;
-                break;
-            }
-
-            if (editor.search) {
-                editor.buffer.cursor = editor.search_current;
-
-                if (editor.search_found && move_more) {
-                    buffer_search(&editor.buffer, editor.search_query, move_more == 1);
-                    editor.search_current = editor.buffer.cursor;
-                }
-
-                editor.search_found = buffer_search(&editor.buffer, editor.search_query, editor.search_forward);
-            }
-
-            buffer_anchor_snap(&editor.buffer);
-            buffer_anchor_fix(&editor.buffer);
-        } else {
-            const Mapping mapping = editor.escape ? escape_mappings[(size_t) ch] : normal_mappings[(size_t) ch];
-            editor.escape = false;
-
-            if (mapping.editor) {
-                mapping.editor();
-            } else if (mapping.buffer) {
-                mapping.buffer(&editor.buffer);
-            } else if (mapping.delete) {
-                buffer_delete(&editor.buffer, mapping.delete);
-            } else if (isprint(ch) || ch == '\r') {
-                buffer_insert(&editor.buffer, ch);
-            }
+        if (mapping.editor) {
+            mapping.editor();
+        } else if (mapping.buffer) {
+            mapping.buffer(&editor.buffer);
+        } else if (mapping.delete) {
+            buffer_delete(&editor.buffer, mapping.delete);
+        } else if (isprint(ch) || ch == '\r') {
+            buffer_insert(&editor.buffer, ch);
         }
     }
 
     buffer_free(&editor.buffer);
-    string_free(&editor.search_query);
+    string_free(&editor.query);
     term_reset();
     return 0;
 }
