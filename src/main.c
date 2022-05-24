@@ -536,6 +536,20 @@ void buffer_forward_word(Buffer *buffer)
     }
 }
 
+void buffer_backward_line(Buffer *buffer)
+{
+    if (buffer->count) {
+        buffer->cursor.x = 0;
+    }
+}
+
+void buffer_forward_line(Buffer *buffer)
+{
+    if (buffer->count) {
+        buffer->cursor.x = buffer->lines[buffer->cursor.y].size;
+    }
+}
+
 void buffer_cursor_fix(Buffer *buffer)
 {
     if (buffer->count) {
@@ -1011,6 +1025,10 @@ static const Mapping normal_mappings[KEY_MAX] = {
     [CTRL('d')] = {.delete = buffer_forward_char},
     [127]       = {.delete = buffer_backward_char},
 
+    [CTRL('a')] = {.buffer = buffer_backward_line},
+    [CTRL('e')] = {.buffer = buffer_forward_line},
+
+    [CTRL('k')] = {.delete = buffer_forward_line},
     [CTRL('w')] = {.buffer = buffer_save},
 };
 
@@ -1023,6 +1041,7 @@ static const Mapping escape_mappings[KEY_MAX] = {
     ['p'] = {.buffer = buffer_previous_para},
     ['n'] = {.buffer = buffer_next_para},
     ['d'] = {.delete = buffer_forward_word},
+
     [127] = {.delete = buffer_backward_word},
 };
 
