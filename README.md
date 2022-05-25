@@ -18,7 +18,6 @@ $ ./meno src/main.c
 | <kbd>C-x C-f</kbd> | Find file |
 | <kbd>C-x C-b</kbd> | Switch buffers |
 | <kbd>M-x</kbd> | Select syntax for buffer |
-| <kbd>M-q</kbd> | Format buffer |
 | <kbd>C-s</kbd> | Search forward |
 | <kbd>C-r</kbd> | Search backward |
 | <kbd>M-s</kbd> | Jump to the next match of previous search |

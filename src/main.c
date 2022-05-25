@@ -13,7 +13,6 @@
 #include <termios.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
-#include <sys/wait.h>
 #include <sys/ioctl.h>
 
 #include "sv.h"
@@ -1157,58 +1156,6 @@ void editor_find_file(void)
     }
 }
 
-void editor_format(void)
-{
-    if (!editor.count) return;
-
-    const Syntax syntax = syntaxes[editor.buffer->syntax];
-
-    if (!syntax.format) {
-        editor_error("no format command defined for syntax '%s'", syntax.name);
-        return;
-    }
-
-    if (!editor_save_internal()) {
-        return;
-    }
-
-    const pid_t pid = fork();
-    if (pid == -1) {
-        editor_error("could not fork process: %s", strerror(errno));
-    } else if (pid) {
-        int wstatus;
-        if (wait(&wstatus) == -1) {
-            editor_error("could not wait for process: %s", strerror(errno));
-            return;
-        }
-
-        if (WIFEXITED(wstatus)) {
-            const int code = WEXITSTATUS(wstatus);
-            if (code) {
-                editor_error("process exited abnormally with exit code %d", code);
-                return;
-            }
-        } else {
-            editor_error("process exited abnormally");
-            return;
-        }
-
-        const Vector cursor = editor.buffer->cursor;
-        buffer_open(editor.buffer);
-        editor.buffer->cursor = cursor;
-        buffer_cursor_fix(editor.buffer);
-        buffer_anchor_snap(editor.buffer);
-    } else {
-        static const char *format_argv[3];
-        format_argv[0] = syntax.format;
-        format_argv[1] = editor.buffer->path.data;
-
-        execvp(*format_argv, (char *const *) format_argv);
-        editor_error("could not execute process '%s': %s", syntax.format, strerror(errno));
-        exit(0);
-    }
-}
-
 void editor_quit(void)
 {
     string_free(&editor.search);
@@ -1284,7 +1231,6 @@ static const Mapping normal_mappings[KEY_MAX] = {
 static const Mapping escape_mappings[KEY_MAX] = {
     ['s'] = {.editor = editor_search_further_forward},
     ['r'] = {.editor = editor_search_further_backward},
-    ['q'] = {.editor = editor_format},
     ['x'] = {.editor = editor_switch_syntax},
 
     ['b'] = {.buffer = buffer_backward_word},
