@@ -1,6 +1,16 @@
 #ifndef SYNTAX_H
 #define SYNTAX_H
 
+typedef struct {
+    const char *name;
+    const char *format;
+
+    const SV ident;
+    const SV comment;
+    const SV *keywords;
+    const SV *specials;
+} Syntax;
+
 static const SV c_keywords[] = {
     SVStatic("if"),
     SVStatic("else"),
@@ -16,6 +26,9 @@ static const SV c_specials[] = {
 
 static const Syntax syntaxes[] = {
     {
+        .name = "C/C++",
+        .format = "astyle",
+
         .ident = SVStatic("#"),
         .comment = SVStatic("//"),
         .keywords = c_keywords,

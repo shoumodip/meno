@@ -13,7 +13,11 @@
 #include <termios.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <sys/ioctl.h>
+
+#include "sv.h"
+#include "syntax.h"
 
 #define INC_CAP 128
 #define KEY_MAX 128
@@ -43,18 +47,7 @@ static inline Vector vector_sub(Vector a, Vector b)
     return (Vector) {.x = a.x - b.x, .y = a.y - b.y};
 }
 
-#include "sv.h"
-
 // Syntax
-typedef struct {
-    const SV ident;
-    const SV comment;
-    const SV *keywords;
-    const SV *specials;
-} Syntax;
-
-#include "syntax.h"
-
 typedef enum {
     SYNTAX_NORMAL,
     SYNTAX_KEYWORD,
@@ -832,7 +825,6 @@ typedef struct {
     size_t count;
     size_t capacity;
 
-    bool quit;
     bool escape;
     Buffer *buffer;
 
@@ -865,11 +857,6 @@ void editor_delete_buffer(void)
         if (index) index--;
         editor.buffer = editor.buffers + index;
     }
-}
-
-void editor_quit(void)
-{
-    editor.quit = true;
 }
 
 String editor_prompt(const char *prompt, void (*callback)(void *userdata), void *userdata)
@@ -1072,12 +1059,12 @@ void editor_error(const char *format, ...)
     getchar();
 }
 
-void editor_save(void)
+bool editor_save_internal(void)
 {
     if (!editor.buffer->path.size) {
         const String path = editor_prompt("Save to: ", NULL, NULL);
         if (!path.size) {
-            return;
+            return false;
         }
 
         editor.buffer->path = string(path.data, path.size);
@@ -1085,7 +1072,15 @@ void editor_save(void)
 
     if (!buffer_save(editor.buffer)) {
         editor_error("could not save to file '%s': %s", editor.buffer->path.data, strerror(errno));
+        return false;
     }
+
+    return true;
+}
+
+void editor_save(void)
+{
+    editor_save_internal();
 }
 
 bool cstr_string_eq(const char *a, String b)
@@ -1128,11 +1123,75 @@ void editor_find_file(void)
         editor.buffer->path = string(path.data, path.size);
         string_insert(&editor.buffer->path, editor.buffer->path.size, "\0", 1);
         buffer_open(editor.buffer);
+        editor.buffer->modified = true;
     }
+}
+
+void editor_format(void)
+{
+    const Syntax syntax = syntaxes[editor.buffer->syntax];
+
+    if (!syntax.format) {
+        editor_error("no format command defined for syntax '%s'", syntax.name);
+        return;
+    }
+
+    if (!editor_save_internal()) {
+        return;
+    }
+
+    const pid_t pid = fork();
+    if (pid == -1) {
+        editor_error("could not fork process: %s", strerror(errno));
+    } else if (pid) {
+        int wstatus;
+        if (wait(&wstatus) == -1) {
+            editor_error("could not wait for process: %s", strerror(errno));
+            return;
+        }
+
+        if (WIFEXITED(wstatus)) {
+            const int code = WEXITSTATUS(wstatus);
+            if (code) {
+                editor_error("process exited abnormally with exit code %d", code);
+                return;
+            }
+        } else {
+            editor_error("process exited abnormally");
+            return;
+        }
+
+        const Vector cursor = editor.buffer->cursor;
+        buffer_open(editor.buffer);
+        editor.buffer->cursor = cursor;
+        buffer_cursor_fix(editor.buffer);
+        buffer_anchor_snap(editor.buffer);
+    } else {
+        static const char *format_argv[3];
+        format_argv[0] = syntax.format;
+        format_argv[1] = editor.buffer->path.data;
+
+        execvp(*format_argv, (char *const *) format_argv);
+        editor_error("could not execute process '%s': %s", syntax.format, strerror(errno));
+        exit(0);
+    }
+}
+
+void editor_quit(void)
+{
+    string_free(&editor.search);
+    string_free(&editor.query);
+    string_free(&search_save);
+    term_reset();
+    exit(0);
 }
 
 void editor_ctrl_x(void)
 {
+    term_move(Vector(0, term.size.y + 1));
+    printf("C-x");
+    term_move(vector_sub(editor.buffer->cursor, editor.buffer->anchor));
+
     switch (getchar()) {
     case CTRL('r'): editor_replace(); break;
     case CTRL('c'): editor_quit(); break;
@@ -1175,6 +1234,7 @@ static const Mapping normal_mappings[KEY_MAX] = {
 static const Mapping escape_mappings[KEY_MAX] = {
     ['s'] = {.editor = editor_search_further_forward},
     ['r'] = {.editor = editor_search_further_backward},
+    ['q'] = {.editor = editor_format},
 
     ['b'] = {.buffer = buffer_backward_word},
     ['f'] = {.buffer = buffer_forward_word},
@@ -1194,13 +1254,14 @@ int main(int argc, char **argv)
         editor.buffer->path = string(argv[i], strlen(argv[i]));
         string_insert(&editor.buffer->path, editor.buffer->path.size, "\0", 1);
         buffer_open(editor.buffer);
+        editor.buffer->modified = true;
     }
 
     if (argc == 1) {
         editor_new_buffer();
     }
 
-    while (!editor.quit) {
+    while (true) {
         buffer_print(*editor.buffer);
 
         const char ch = getchar();
@@ -1217,10 +1278,5 @@ int main(int argc, char **argv)
             buffer_insert(editor.buffer, ch);
         }
     }
-
-    string_free(&editor.search);
-    string_free(&editor.query);
-    string_free(&search_save);
-    term_reset();
     return 0;
 }
