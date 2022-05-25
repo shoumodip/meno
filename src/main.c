@@ -246,17 +246,36 @@ void string_free(String *string)
     memset(string, 0, sizeof(String));
 }
 
+void string_grow(String *string, size_t size)
+{
+    string->capacity = MAX(INC_CAP, MAX(string->capacity + INC_CAP, size));
+    string->data = realloc(string->data, string->capacity);
+    assert(string->data);
+}
+
 void string_insert(String *string, size_t index, const char *data, size_t size)
 {
     if (string->size >= string->capacity) {
-        string->capacity = MAX(INC_CAP, MAX(string->capacity + INC_CAP, string->size + size));
-        string->data = realloc(string->data, string->capacity);
-        assert(string->data);
+        string_grow(string, string->size + size);
     }
 
     memmove(string->data + index + 1, string->data + index, string->size - index);
     memcpy(string->data + index, data, size);
     string->size += size;
+}
+
+void string_replace(String *string, size_t index, size_t size, String with)
+{
+    if (with.size > size) {
+        string_grow(string, with.size - size);
+    }
+
+    memmove(string->data + index + with.size, string->data + index + size, string->size - index - size);
+    memcpy(string->data + index, with.data, with.size);
+
+    if (with.size > size) {
+        string->size += with.size - size;
+    }
 }
 
 bool memieq(const char *a, const char *b, size_t size)
@@ -298,11 +317,39 @@ bool string_search_backward(String string, String query, size_t *position)
     return false;
 }
 
-// Buffer
 typedef struct {
     String *lines;
     size_t count;
     size_t capacity;
+} Text;
+
+void text_free(Text *text)
+{
+    for (size_t i = 0; i < text->count; ++i) {
+        string_free(text->lines + i);
+    }
+    free(text->lines);
+    memset(text, 0, sizeof(Text));
+}
+
+void text_grow(Text *text)
+{
+    if (text->count >= text->capacity) {
+        text->capacity = MAX(INC_CAP, text->capacity + INC_CAP);
+        text->lines = realloc(text->lines, text->capacity * sizeof(String));
+        assert(text->lines);
+    }
+}
+
+void text_push(Text *text, String line)
+{
+    text_grow(text);
+    text->lines[text->count++] = line;
+}
+
+// Buffer
+typedef struct {
+    Text text;
 
     bool region;
     Vector cursor;
@@ -315,33 +362,9 @@ typedef struct {
     bool modified;
 } Buffer;
 
-void buffer_free(Buffer *buffer)
-{
-    for (size_t i = 0; i < buffer->count; ++i) {
-        string_free(buffer->lines + i);
-    }
-    free(buffer->lines);
-    memset(buffer, 0, sizeof(Buffer));
-}
-
-void buffer_grow(Buffer *buffer)
-{
-    if (buffer->count >= buffer->capacity) {
-        buffer->capacity = MAX(INC_CAP, buffer->capacity + INC_CAP);
-        buffer->lines = realloc(buffer->lines, buffer->capacity * sizeof(String));
-        assert(buffer->lines);
-    }
-}
-
-void buffer_push(Buffer *buffer, String string)
-{
-    buffer_grow(buffer);
-    buffer->lines[buffer->count++] = string;
-}
-
 void buffer_open(Buffer *buffer, const char *path)
 {
-    buffer_free(buffer);
+    text_free(&buffer->text);
     buffer->path = path;
 
     const int fd = open(path, O_RDONLY);
@@ -367,7 +390,7 @@ void buffer_open(Buffer *buffer, const char *path)
     char *head = (char *) contents.data;
     while (contents.size) {
         const SV line = sv_split(&contents, '\n');
-        buffer_push(buffer, string(line.data, line.size));
+        text_push(&buffer->text, string(line.data, line.size));
     }
 
     munmap(head, statbuf.st_size);
@@ -380,8 +403,8 @@ void buffer_save(Buffer *buffer)
         FILE *output = fopen(buffer->path, "w");
         assert(output);
 
-        for (size_t i = 0; i < buffer->count; ++i) {
-            const String line = buffer->lines[i];
+        for (size_t i = 0; i < buffer->text.count; ++i) {
+            const String line = buffer->text.lines[i];
             fprintf(output, "%.*s\n", (int) line.size, line.data);
         }
 
@@ -410,27 +433,27 @@ void buffer_anchor_fix(Buffer *buffer)
 void buffer_insert(Buffer *buffer, char ch)
 {
     buffer->modified = true;
-    buffer_grow(buffer);
+    text_grow(&buffer->text);
 
-    if (buffer->count == 0) {
-        memset(buffer->lines, 0, sizeof(String));
-        buffer->count = 1;
+    if (buffer->text.count == 0) {
+        memset(buffer->text.lines, 0, sizeof(String));
+        buffer->text.count = 1;
     }
 
     if (isprint(ch)) {
-        string_insert(buffer->lines + buffer->cursor.y, buffer->cursor.x++, &ch, 1);
+        string_insert(buffer->text.lines + buffer->cursor.y, buffer->cursor.x++, &ch, 1);
     } else if (ch == '\r') {
-        String *prev = buffer->lines + buffer->cursor.y;
+        String *prev = buffer->text.lines + buffer->cursor.y;
 
-        memmove(buffer->lines + buffer->cursor.y + 1,
-                buffer->lines + buffer->cursor.y,
-                (buffer->count - buffer->cursor.y) * sizeof(String));
+        memmove(buffer->text.lines + buffer->cursor.y + 1,
+                buffer->text.lines + buffer->cursor.y,
+                (buffer->text.count - buffer->cursor.y) * sizeof(String));
 
-        buffer->lines[++buffer->cursor.y] =
+        buffer->text.lines[++buffer->cursor.y] =
             string(prev->data + buffer->cursor.x,
                    prev->size - buffer->cursor.x);
 
-        buffer->count++;
+        buffer->text.count++;
 
         prev->size = buffer->cursor.x;
         buffer->cursor.x = 0;
@@ -441,14 +464,14 @@ void buffer_insert(Buffer *buffer, char ch)
 
 String buffer_snap_previous_line(Buffer *buffer)
 {
-    const String line = buffer->lines[--buffer->cursor.y];
+    const String line = buffer->text.lines[--buffer->cursor.y];
     buffer->cursor.x = line.size;
     return line;
 }
 
 String buffer_snap_next_line(Buffer *buffer)
 {
-    const String line = buffer->lines[++buffer->cursor.y];
+    const String line = buffer->text.lines[++buffer->cursor.y];
     buffer->cursor.x = 0;
     return line;
 }
@@ -460,7 +483,7 @@ void buffer_anchor_snap(Buffer *buffer)
 
 void buffer_backward_char(Buffer *buffer)
 {
-    if (buffer->count) {
+    if (buffer->text.count) {
         if (buffer->cursor.x) {
             buffer->cursor.x--;
             buffer_anchor_fix(buffer);
@@ -473,8 +496,8 @@ void buffer_backward_char(Buffer *buffer)
 
 void buffer_forward_char(Buffer *buffer)
 {
-    if (buffer->count) {
-        if (buffer->cursor.x < buffer->lines[buffer->cursor.y].size) {
+    if (buffer->text.count) {
+        if (buffer->cursor.x < buffer->text.lines[buffer->cursor.y].size) {
             buffer->cursor.x++;
             buffer_anchor_fix(buffer);
             buffer_anchor_snap(buffer);
@@ -484,8 +507,8 @@ void buffer_forward_char(Buffer *buffer)
 
 void buffer_backward_word(Buffer *buffer)
 {
-    if (buffer->count) {
-        String line = buffer->lines[buffer->cursor.y];
+    if (buffer->text.count) {
+        String line = buffer->text.lines[buffer->cursor.y];
 
         if (line.size) {
             if (buffer->cursor.x && syntax_isident(buffer->syntax, line.data[buffer->cursor.x])) {
@@ -516,14 +539,14 @@ void buffer_backward_word(Buffer *buffer)
 
 void buffer_forward_word(Buffer *buffer)
 {
-    if (buffer->count) {
-        String line = buffer->lines[buffer->cursor.y];
+    if (buffer->text.count) {
+        String line = buffer->text.lines[buffer->cursor.y];
 
         while (buffer->cursor.x < line.size && !syntax_isident(buffer->syntax, line.data[buffer->cursor.x])) {
             buffer->cursor.x++;
         }
 
-        if (buffer->cursor.x == line.size && buffer->cursor.y < buffer->count) {
+        if (buffer->cursor.x == line.size && buffer->cursor.y < buffer->text.count) {
             line = buffer_snap_next_line(buffer);
         }
 
@@ -538,22 +561,22 @@ void buffer_forward_word(Buffer *buffer)
 
 void buffer_backward_line(Buffer *buffer)
 {
-    if (buffer->count) {
+    if (buffer->text.count) {
         buffer->cursor.x = 0;
     }
 }
 
 void buffer_forward_line(Buffer *buffer)
 {
-    if (buffer->count) {
-        buffer->cursor.x = buffer->lines[buffer->cursor.y].size;
+    if (buffer->text.count) {
+        buffer->cursor.x = buffer->text.lines[buffer->cursor.y].size;
     }
 }
 
 void buffer_cursor_fix(Buffer *buffer)
 {
-    if (buffer->count) {
-        buffer->cursor.x = MIN(buffer->cursor.x, buffer->lines[buffer->cursor.y].size);
+    if (buffer->text.count) {
+        buffer->cursor.x = MIN(buffer->cursor.x, buffer->text.lines[buffer->cursor.y].size);
     }
 }
 
@@ -569,7 +592,7 @@ void buffer_previous_line(Buffer *buffer)
 
 void buffer_next_line(Buffer *buffer)
 {
-    if (buffer->cursor.y + 1 < buffer->count) {
+    if (buffer->cursor.y + 1 < buffer->text.count) {
         buffer->cursor.y++;
         buffer_cursor_fix(buffer);
         buffer_anchor_snap(buffer);
@@ -579,11 +602,11 @@ void buffer_next_line(Buffer *buffer)
 
 void buffer_previous_para(Buffer *buffer)
 {
-    while (buffer->cursor.y && buffer->lines[buffer->cursor.y].size) {
+    while (buffer->cursor.y && buffer->text.lines[buffer->cursor.y].size) {
         buffer->cursor.y--;
     }
 
-    while (buffer->cursor.y && !buffer->lines[buffer->cursor.y].size) {
+    while (buffer->cursor.y && !buffer->text.lines[buffer->cursor.y].size) {
         buffer->cursor.y--;
     }
 
@@ -594,11 +617,11 @@ void buffer_previous_para(Buffer *buffer)
 
 void buffer_next_para(Buffer *buffer)
 {
-    while (buffer->cursor.y + 1 < buffer->count && buffer->lines[buffer->cursor.y].size) {
+    while (buffer->cursor.y + 1 < buffer->text.count && buffer->text.lines[buffer->cursor.y].size) {
         buffer->cursor.y++;
     }
 
-    while (buffer->cursor.y + 1 < buffer->count && !buffer->lines[buffer->cursor.y].size) {
+    while (buffer->cursor.y + 1 < buffer->text.count && !buffer->text.lines[buffer->cursor.y].size) {
         buffer->cursor.y++;
     }
 
@@ -630,7 +653,7 @@ void buffer_print(Buffer buffer)
 
     Vector pen;
     bool first = true;
-    const size_t space = MIN(buffer.count, buffer.anchor.y + term.size.y);
+    const size_t space = MIN(buffer.text.count, buffer.anchor.y + term.size.y);
     for (pen.y = buffer.anchor.y; pen.y < space; ++pen.y) {
         if (first) {
             first = false;
@@ -640,8 +663,8 @@ void buffer_print(Buffer buffer)
         pen.x = 0;
 
         SV view = {
-            .data = buffer.lines[pen.y].data,
-            .size = buffer.lines[pen.y].size
+            .data = buffer.text.lines[pen.y].data,
+            .size = buffer.text.lines[pen.y].size
         };
 
         view.size = MIN(view.size, buffer.anchor.x + term.size.x);
@@ -695,7 +718,7 @@ typedef void (*BufferAction)(Buffer *);
 
 void buffer_delete(Buffer *buffer, BufferAction motion)
 {
-    if (buffer->count == 0) {
+    if (buffer->text.count == 0) {
         return;
     }
 
@@ -708,34 +731,34 @@ void buffer_delete(Buffer *buffer, BufferAction motion)
     Vector start, end;
     buffer_get_region(*buffer, &start, &end);
 
-    if (buffer->region && end.x < buffer->lines[end.y].size) {
+    if (buffer->region && end.x < buffer->text.lines[end.y].size) {
         end.x++;
     }
 
     if (start.y == end.y) {
         if (end.x > start.x) {
-            String *string = buffer->lines + start.y;
+            String *string = buffer->text.lines + start.y;
             assert(string->size >= end.x);
 
             memmove(string->data + start.x, string->data + end.x, string->size - end.x);
             string->size -= end.x - start.x;
         }
     } else {
-        String *string_start = buffer->lines + start.y;
-        String string_end = buffer->lines[end.y];
+        String *string_start = buffer->text.lines + start.y;
+        String string_end = buffer->text.lines[end.y];
 
         string_start->size = start.x;
         string_insert(string_start, start.x, string_end.data + end.x, string_end.size - end.x);
 
         for (size_t i = start.y + 1; i <= end.y; ++i) {
-            string_free(buffer->lines + i);
+            string_free(buffer->text.lines + i);
         }
 
-        memmove(buffer->lines + start.y + 1,
-                buffer->lines + end.y + 1,
-                (buffer->count - end.y - 1) * sizeof(String));
+        memmove(buffer->text.lines + start.y + 1,
+                buffer->text.lines + end.y + 1,
+                (buffer->text.count - end.y - 1) * sizeof(String));
 
-        buffer->count -= end.y - start.y;
+        buffer->text.count -= end.y - start.y;
     }
 
     buffer->region = false;
@@ -747,8 +770,8 @@ bool buffer_search(Buffer *buffer, String query, bool forward)
     if (forward) {
         size_t x = buffer->cursor.x + 1;
 
-        for (size_t y = buffer->cursor.y; y < buffer->count; ++y) {
-            if (string_search_forward(buffer->lines[y], query, &x)) {
+        for (size_t y = buffer->cursor.y; y < buffer->text.count; ++y) {
+            if (string_search_forward(buffer->text.lines[y], query, &x)) {
                 buffer->cursor = Vector(x, y);
                 goto found;
             }
@@ -759,7 +782,7 @@ bool buffer_search(Buffer *buffer, String query, bool forward)
         }
 
         for (size_t y = 0; y <= buffer->cursor.y; ++y) {
-            if (string_search_forward(buffer->lines[y], query, &x)) {
+            if (string_search_forward(buffer->text.lines[y], query, &x)) {
                 buffer->cursor = Vector(x, y);
                 goto found;
             }
@@ -769,7 +792,7 @@ bool buffer_search(Buffer *buffer, String query, bool forward)
         if (x) x--;
 
         for (size_t y = buffer->cursor.y + 1; y > 0; --y) {
-            const String line = buffer->lines[y - 1];
+            const String line = buffer->text.lines[y - 1];
 
             if (y <= buffer->cursor.y) {
                 x = line.size;
@@ -781,8 +804,8 @@ bool buffer_search(Buffer *buffer, String query, bool forward)
             }
         }
 
-        for (size_t y = buffer->count; y > buffer->cursor.y; --y) {
-            const String line = buffer->lines[y - 1];
+        for (size_t y = buffer->text.count; y > buffer->cursor.y; --y) {
+            const String line = buffer->text.lines[y - 1];
             x = line.size;
 
             if (string_search_backward(line, query, &x)) {
@@ -870,7 +893,7 @@ void editor_search_callback(void *userdata)
 
     if (search->found) {
         term_color(COLOR_SEARCH);
-        printf("%.*s", (int) editor.query.size, editor.buffer.lines[editor.buffer.cursor.y].data + editor.buffer.cursor.x);
+        printf("%.*s", (int) editor.query.size, editor.buffer.text.lines[editor.buffer.cursor.y].data + editor.buffer.cursor.x);
         term_color_reset();
     }
 
@@ -965,7 +988,7 @@ void editor_replace(void)
     while (editor.search.size) {
         buffer_print(editor.buffer);
         term_color(COLOR_SEARCH);
-        printf("%.*s", (int) editor.query.size, editor.buffer.lines[editor.buffer.cursor.y].data + editor.buffer.cursor.x);
+        printf("%.*s", (int) editor.search.size, editor.buffer.text.lines[editor.buffer.cursor.y].data + editor.buffer.cursor.x);
         term_color_reset();
 
         bool replace = true;
@@ -983,8 +1006,8 @@ void editor_replace(void)
         }
 
         if (replace) {
-            memcpy(editor.buffer.lines[editor.buffer.cursor.y].data + editor.buffer.cursor.x,
-                   replace_with.data, replace_with.size);
+            string_replace(editor.buffer.text.lines + editor.buffer.cursor.y,
+                           editor.buffer.cursor.x, editor.search.size, replace_with);
         }
 
         if (!buffer_search(&editor.buffer, editor.search, true)) {
@@ -1071,7 +1094,7 @@ int main(int argc, char **argv)
         }
     }
 
-    buffer_free(&editor.buffer);
+    text_free(&editor.buffer.text);
     string_free(&editor.search);
     string_free(&editor.query);
     string_free(&search_save);
