@@ -4,6 +4,7 @@
 #include <stdbool.h>
 
 #include <ctype.h>
+#include <errno.h>
 #include <assert.h>
 
 #include <fcntl.h>
@@ -327,7 +328,7 @@ typedef struct {
     Vector cursor;
     Vector marker;
 
-    const char *path;
+    String path;
     Vector anchor;
     size_t syntax;
 
@@ -358,12 +359,13 @@ void buffer_push(Buffer *buffer, String line)
     buffer->lines[buffer->count++] = line;
 }
 
-void buffer_open(Buffer *buffer, const char *path)
+void buffer_open(Buffer *buffer)
 {
+    String path = buffer->path;
     buffer_free(buffer);
     buffer->path = path;
 
-    const int fd = open(path, O_RDONLY);
+    const int fd = open(buffer->path.data, O_RDONLY);
     if (fd == -1) {
         return;
     }
@@ -378,8 +380,9 @@ void buffer_open(Buffer *buffer, const char *path)
     contents.size = statbuf.st_size;
 
     contents.data = mmap(NULL, contents.size, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+
     if (contents.data == MAP_FAILED) {
-        close(fd);
         return;
     }
 
@@ -392,12 +395,13 @@ void buffer_open(Buffer *buffer, const char *path)
     munmap(head, statbuf.st_size);
 }
 
-void buffer_save(Buffer *buffer)
+bool buffer_save(Buffer *buffer)
 {
-    // TODO ask for file path if buffer is not associated with a file
-    if (buffer->path && buffer->modified) {
-        FILE *output = fopen(buffer->path, "w");
-        assert(output);
+    if (buffer->modified) {
+        FILE *output = fopen(buffer->path.data, "w");
+        if (!output) {
+            return false;
+        }
 
         for (size_t i = 0; i < buffer->count; ++i) {
             const String line = buffer->lines[i];
@@ -407,6 +411,8 @@ void buffer_save(Buffer *buffer)
         fclose(output);
         buffer->modified = false;
     }
+
+    return true;
 }
 
 void buffer_anchor_fix(Buffer *buffer)
@@ -1020,6 +1026,26 @@ void editor_escape_map(void)
     editor.escape = true;
 }
 
+void editor_save(void)
+{
+    if (!editor.buffer.path.size) {
+        const String path = editor_prompt("Save to: ", NULL, NULL);
+        if (!path.size) {
+            return;
+        }
+
+        editor.buffer.path = string(path.data, path.size);
+    }
+
+    if (!buffer_save(&editor.buffer)) {
+        term_move(Vector(0, term.size.y + 1));
+        term_color(COLOR_FAILED);
+        fprintf(stdout, "Error: could not save to file '%s': %s", editor.buffer.path.data, strerror(errno));
+        term_color_reset();
+        getchar();
+    }
+}
+
 // Mappings
 typedef struct {
     BufferAction buffer;
@@ -1048,7 +1074,7 @@ static const Mapping normal_mappings[KEY_MAX] = {
     [CTRL('e')] = {.buffer = buffer_forward_line},
 
     [CTRL('k')] = {.delete = buffer_forward_line},
-    [CTRL('w')] = {.buffer = buffer_save},
+    [CTRL('w')] = {.editor = editor_save},
 };
 
 static const Mapping escape_mappings[KEY_MAX] = {
@@ -1068,8 +1094,10 @@ int main(int argc, char **argv)
 {
     term_init();
 
-    if (argc == 2) {
-        buffer_open(&editor.buffer, argv[1]);
+    if (argc > 1) {
+        editor.buffer.path = string(argv[1], strlen(argv[1]));
+        string_insert(&editor.buffer.path, editor.buffer.path.size, "\0", 1);
+        buffer_open(&editor.buffer);
     }
 
     while (!editor.quit) {
@@ -1091,6 +1119,8 @@ int main(int argc, char **argv)
     }
 
     buffer_free(&editor.buffer);
+    string_free(&editor.buffer.path);
+
     string_free(&editor.search);
     string_free(&editor.query);
     string_free(&search_save);
