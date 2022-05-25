@@ -59,7 +59,7 @@ typedef enum {
 
 bool sv_list_find(const SV *list, SV pred)
 {
-    while (list->data) {
+    while (list && list->data) {
         if (sv_eq(*list++, pred)) {
             return true;
         }
@@ -81,7 +81,7 @@ SV syntax_split(size_t syntax, SV *view, SyntaxType *type)
 {
     SV word = {0};
     bool found = false;
-    if (isstring(*view->data)) {
+    if (!syntaxes[syntax].nostring && isstring(*view->data)) {
         found = true;
         *type = SYNTAX_STRING;
 
@@ -93,7 +93,7 @@ SV syntax_split(size_t syntax, SV *view, SyntaxType *type)
                 break;
             }
         }
-    } else if (sv_starts_with(*view, syntaxes[syntax].comment)) {
+    } else if (syntaxes[syntax].comment.size && sv_starts_with(*view, syntaxes[syntax].comment)) {
         found = true;
         *type = SYNTAX_COMMENT;
     } else if (syntax_isident(syntax, *view->data)) {
@@ -387,6 +387,27 @@ void buffer_open(Buffer *buffer)
     }
 
     munmap(head, statbuf.st_size);
+}
+
+void buffer_detect_syntax(Buffer *buffer)
+{
+    SV path = sv_rtrim(sv(buffer->path.data, buffer->path.size), '\0');
+    for (size_t i = 1; i < syntaxes_count; ++i) {
+        if (sv_list_find(syntaxes[i].filenames, path)) {
+            buffer->syntax = i;
+            return;
+        }
+    }
+
+    sv_split(&path, '.');
+    for (size_t i = 1; i < syntaxes_count; ++i) {
+        if (sv_list_find(syntaxes[i].extensions, path)) {
+            buffer->syntax = i;
+            return;
+        }
+    }
+
+    buffer->syntax = 0;
 }
 
 bool buffer_save(Buffer *buffer)
@@ -848,6 +869,8 @@ void editor_new_buffer(void)
 
 void editor_delete_buffer(void)
 {
+    if (!editor.count) return;
+
     if (editor.buffer) {
         size_t index = editor.buffer - editor.buffers;
         buffer_free(editor.buffer);
@@ -933,6 +956,8 @@ void editor_search_callback(void *userdata)
 
 void editor_search(bool forward)
 {
+    if (!editor.count) return;
+
     editor.search.size = 0;
 
     Search search = {
@@ -951,6 +976,7 @@ void editor_search(bool forward)
 
 void editor_search_further(bool forward)
 {
+    if (!editor.count) return;
     if (editor.search.size) {
         buffer_search(editor.buffer, editor.search, forward);
     }
@@ -998,6 +1024,8 @@ static String search_save;
 
 void editor_replace(void)
 {
+    if (!editor.count) return;
+
     search_save.size = 0;
     string_insert(&search_save, 0, editor.search.data, editor.search.size);
 
@@ -1080,6 +1108,7 @@ bool editor_save_internal(void)
 
 void editor_save(void)
 {
+    if (!editor.count) return;
     editor_save_internal();
 }
 
@@ -1123,12 +1152,15 @@ void editor_find_file(void)
         editor.buffer->path = string(path.data, path.size);
         string_insert(&editor.buffer->path, editor.buffer->path.size, "\0", 1);
         buffer_open(editor.buffer);
+        buffer_detect_syntax(editor.buffer);
         editor.buffer->modified = true;
     }
 }
 
 void editor_format(void)
 {
+    if (!editor.count) return;
+
     const Syntax syntax = syntaxes[editor.buffer->syntax];
 
     if (!syntax.format) {
@@ -1202,6 +1234,24 @@ void editor_ctrl_x(void)
     }
 }
 
+void editor_switch_syntax(void)
+{
+    const String name = editor_prompt("Switch syntax: ", NULL, NULL);
+    if (!name.size) {
+        return;
+    }
+
+    const SV pred = sv(name.data, name.size);
+    for (size_t i = 0; i < syntaxes_count; ++i) {
+        if (sv_eq(syntaxes[i].name, pred)) {
+            editor.buffer->syntax = i;
+            return;
+        }
+    }
+
+    editor_error("no such syntax '"SVFmt"'", SVArg(pred));
+}
+
 // Mappings
 typedef struct {
     BufferAction buffer;
@@ -1235,6 +1285,7 @@ static const Mapping escape_mappings[KEY_MAX] = {
     ['s'] = {.editor = editor_search_further_forward},
     ['r'] = {.editor = editor_search_further_backward},
     ['q'] = {.editor = editor_format},
+    ['x'] = {.editor = editor_switch_syntax},
 
     ['b'] = {.buffer = buffer_backward_word},
     ['f'] = {.buffer = buffer_forward_word},
@@ -1254,6 +1305,7 @@ int main(int argc, char **argv)
         editor.buffer->path = string(argv[i], strlen(argv[i]));
         string_insert(&editor.buffer->path, editor.buffer->path.size, "\0", 1);
         buffer_open(editor.buffer);
+        buffer_detect_syntax(editor.buffer);
         editor.buffer->modified = true;
     }
 

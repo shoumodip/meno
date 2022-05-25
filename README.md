@@ -17,6 +17,7 @@ $ ./meno src/main.c
 | <kbd>C-x C-k</kbd> | Delete the current buffer |
 | <kbd>C-x C-f</kbd> | Find file |
 | <kbd>C-x C-b</kbd> | Switch buffers |
+| <kbd>M-x</kbd> | Select syntax for buffer |
 | <kbd>M-q</kbd> | Format buffer |
 | <kbd>C-s</kbd> | Search forward |
 | <kbd>C-r</kbd> | Search backward |

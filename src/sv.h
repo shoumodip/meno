@@ -317,6 +317,7 @@ SV sv_trim_pred(SV sv, bool (*predicate)(char ch))
 
 int sv_find(SV sv, char ch)
 {
+    if (!sv.size) return -1;
     const char *p = memchr(sv.data, ch, sv.size);
     return p ? p - sv.data : -1;
 }
