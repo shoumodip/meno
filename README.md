@@ -13,13 +13,16 @@ $ ./meno src/main.c
 ## Keybindings
 | Key | Description |
 | --- | ----------- |
-| <kbd>C-c</kbd> | Quit Meno |
+| <kbd>C-x C-c</kbd> | Quit Meno |
+| <kbd>C-x C-k</kbd> | Delete the current buffer |
+| <kbd>C-x C-f</kbd> | Find file |
+| <kbd>C-x C-b</kbd> | Switch buffers |
 | <kbd>C-s</kbd> | Search forward |
 | <kbd>C-r</kbd> | Search backward |
 | <kbd>M-s</kbd> | Jump to the next match of previous search |
 | <kbd>M-r</kbd> | Jump to the previous match of previous search |
-| <kbd>C-x</kbd> | Search and Replace |
-| <kbd>C-w</kbd> | Save the file |
+| <kbd>C-x C-r</kbd> | Search and Replace |
+| <kbd>C-x C-s</kbd> | Save the file |
 | <kbd>C-v</kbd> | Start a selection at the cursor |
 | <kbd>C-f</kbd> | Move the cursor forward by a character |
 | <kbd>C-b</kbd> | Move the cursor backward by a character |

@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #include <stdbool.h>
 
 #include <ctype.h>
@@ -827,14 +828,44 @@ found:
 
 // Editor
 typedef struct {
+    Buffer *buffers;
+    size_t count;
+    size_t capacity;
+
     bool quit;
     bool escape;
-    Buffer buffer;
+    Buffer *buffer;
+
     String query;
     String search;
 } Editor;
 
 static Editor editor;
+
+void editor_new_buffer(void)
+{
+    if (editor.count == editor.capacity) {
+        editor.capacity = editor.capacity + INC_CAP;
+        editor.buffers = realloc(editor.buffers, editor.capacity * sizeof(Buffer));
+        assert(editor.buffers);
+    }
+
+    editor.buffer = editor.buffers + editor.count++;
+    memset(editor.buffer, 0, sizeof(Buffer));
+}
+
+void editor_delete_buffer(void)
+{
+    if (editor.buffer) {
+        size_t index = editor.buffer - editor.buffers;
+        buffer_free(editor.buffer);
+        string_free(&editor.buffer->path);
+        memmove(editor.buffers + index, editor.buffer + index + 1, (editor.count - index) * sizeof(Buffer));
+
+        if (index) index--;
+        editor.buffer = editor.buffers + index;
+    }
+}
 
 void editor_quit(void)
 {
@@ -889,13 +920,13 @@ typedef struct {
 void editor_search_callback(void *userdata)
 {
     Search *search = (Search *) userdata;
-    editor.buffer.cursor = search->start;
-    search->found = buffer_search(&editor.buffer, editor.query, search->forward);
-    buffer_print(editor.buffer);
+    editor.buffer->cursor = search->start;
+    search->found = buffer_search(editor.buffer, editor.query, search->forward);
+    buffer_print(*editor.buffer);
 
     if (search->found) {
         term_color(COLOR_SEARCH);
-        printf("%.*s", (int) editor.query.size, editor.buffer.lines[editor.buffer.cursor.y].data + editor.buffer.cursor.x);
+        printf("%.*s", (int) editor.query.size, editor.buffer->lines[editor.buffer->cursor.y].data + editor.buffer->cursor.x);
         term_color_reset();
     }
 
@@ -918,23 +949,23 @@ void editor_search(bool forward)
     editor.search.size = 0;
 
     Search search = {
-        .start = editor.buffer.cursor,
+        .start = editor.buffer->cursor,
         .found = false,
         .forward = forward
     };
 
     const String query = editor_prompt("Search: ", editor_search_callback, &search);
-    if (query.size && !vector_eq(editor.buffer.cursor, search.start)) {
+    if (query.size && !vector_eq(editor.buffer->cursor, search.start)) {
         string_insert(&editor.search, 0, query.data, query.size);
     } else {
-        editor.buffer.cursor = search.start;
+        editor.buffer->cursor = search.start;
     }
 }
 
 void editor_search_further(bool forward)
 {
     if (editor.search.size) {
-        buffer_search(&editor.buffer, editor.search, forward);
+        buffer_search(editor.buffer, editor.search, forward);
     }
 }
 
@@ -988,9 +1019,9 @@ void editor_replace(void)
     String replace_with = editor_prompt("Replace: ", NULL, NULL);
     bool replace_all = false;
     while (editor.search.size) {
-        buffer_print(editor.buffer);
+        buffer_print(*editor.buffer);
         term_color(COLOR_SEARCH);
-        printf("%.*s", (int) editor.search.size, editor.buffer.lines[editor.buffer.cursor.y].data + editor.buffer.cursor.x);
+        printf("%.*s", (int) editor.search.size, editor.buffer->lines[editor.buffer->cursor.y].data + editor.buffer->cursor.x);
         term_color_reset();
 
         bool replace = true;
@@ -1008,11 +1039,11 @@ void editor_replace(void)
         }
 
         if (replace) {
-            string_replace(editor.buffer.lines + editor.buffer.cursor.y,
-                           editor.buffer.cursor.x, editor.search.size, replace_with);
+            string_replace(editor.buffer->lines + editor.buffer->cursor.y,
+                           editor.buffer->cursor.x, editor.search.size, replace_with);
         }
 
-        if (!buffer_search(&editor.buffer, editor.search, true)) {
+        if (!buffer_search(editor.buffer, editor.search, true)) {
             break;
         }
     }
@@ -1026,23 +1057,89 @@ void editor_escape_map(void)
     editor.escape = true;
 }
 
+void editor_error(const char *format, ...)
+{
+    term_move(Vector(0, term.size.y + 1));
+    term_color(COLOR_FAILED);
+    printf("Error: ");
+
+    va_list ap;
+    va_start(ap, format);
+    vprintf(format, ap);
+    va_end(ap);
+
+    term_color_reset();
+    getchar();
+}
+
 void editor_save(void)
 {
-    if (!editor.buffer.path.size) {
+    if (!editor.buffer->path.size) {
         const String path = editor_prompt("Save to: ", NULL, NULL);
         if (!path.size) {
             return;
         }
 
-        editor.buffer.path = string(path.data, path.size);
+        editor.buffer->path = string(path.data, path.size);
     }
 
-    if (!buffer_save(&editor.buffer)) {
-        term_move(Vector(0, term.size.y + 1));
-        term_color(COLOR_FAILED);
-        fprintf(stdout, "Error: could not save to file '%s': %s", editor.buffer.path.data, strerror(errno));
-        term_color_reset();
-        getchar();
+    if (!buffer_save(editor.buffer)) {
+        editor_error("could not save to file '%s': %s", editor.buffer->path.data, strerror(errno));
+    }
+}
+
+bool cstr_string_eq(const char *a, String b)
+{
+    return strlen(a) == b.size && !memcmp(a, b.data, b.size);
+}
+
+bool editor_switch_buffer_internal(String path)
+{
+    for (size_t i = 0; i < editor.count; ++i) {
+        if (cstr_string_eq(editor.buffers[i].path.data, path)) {
+            editor.buffer = editor.buffers + i;
+            return true;
+        }
+    }
+    return false;
+}
+
+void editor_switch_buffer(void)
+{
+    const String path = editor_prompt("Switch buffer: ", NULL, NULL);
+    if (!path.size) {
+        return;
+    }
+
+    if (!editor_switch_buffer_internal(path)) {
+        editor_error("no such buffer '%.*s'", (int) path.size, path.data);
+    }
+}
+
+void editor_find_file(void)
+{
+    const String path = editor_prompt("Find file: ", NULL, NULL);
+    if (!path.size) {
+        return;
+    }
+
+    if (!editor_switch_buffer_internal(path)) {
+        editor_new_buffer();
+        editor.buffer->path = string(path.data, path.size);
+        string_insert(&editor.buffer->path, editor.buffer->path.size, "\0", 1);
+        buffer_open(editor.buffer);
+    }
+}
+
+void editor_ctrl_x(void)
+{
+    switch (getchar()) {
+    case CTRL('r'): editor_replace(); break;
+    case CTRL('c'): editor_quit(); break;
+    case CTRL('s'): editor_save(); break;
+    case CTRL('k'): editor_delete_buffer(); break;
+    case CTRL('b'): editor_switch_buffer(); break;
+    case CTRL('f'): editor_find_file(); break;
     }
 }
 
@@ -1055,10 +1152,9 @@ typedef struct {
 } Mapping;
 
 static const Mapping normal_mappings[KEY_MAX] = {
-    [CTRL('c')] = {.editor = editor_quit},
     [CTRL('s')] = {.editor = editor_search_forward},
     [CTRL('r')] = {.editor = editor_search_backward},
-    [CTRL('x')] = {.editor = editor_replace},
+    [CTRL('x')] = {.editor = editor_ctrl_x},
 
     [27] = {.editor = editor_escape_map},
 
@@ -1074,7 +1170,6 @@ static const Mapping normal_mappings[KEY_MAX] = {
     [CTRL('e')] = {.buffer = buffer_forward_line},
 
     [CTRL('k')] = {.delete = buffer_forward_line},
-    [CTRL('w')] = {.editor = editor_save},
 };
 
 static const Mapping escape_mappings[KEY_MAX] = {
@@ -1094,14 +1189,19 @@ int main(int argc, char **argv)
 {
     term_init();
 
-    if (argc > 1) {
-        editor.buffer.path = string(argv[1], strlen(argv[1]));
-        string_insert(&editor.buffer.path, editor.buffer.path.size, "\0", 1);
-        buffer_open(&editor.buffer);
+    for (int i = 1; i < argc; ++i) {
+        editor_new_buffer();
+        editor.buffer->path = string(argv[i], strlen(argv[i]));
+        string_insert(&editor.buffer->path, editor.buffer->path.size, "\0", 1);
+        buffer_open(editor.buffer);
+    }
+
+    if (argc == 1) {
+        editor_new_buffer();
     }
 
     while (!editor.quit) {
-        buffer_print(editor.buffer);
+        buffer_print(*editor.buffer);
 
         const char ch = getchar();
         const Mapping mapping = editor.escape ? escape_mappings[(size_t) ch] : normal_mappings[(size_t) ch];
@@ -1110,16 +1210,13 @@ int main(int argc, char **argv)
         if (mapping.editor) {
             mapping.editor();
         } else if (mapping.buffer) {
-            mapping.buffer(&editor.buffer);
+            mapping.buffer(editor.buffer);
         } else if (mapping.delete) {
-            buffer_delete(&editor.buffer, mapping.delete);
+            buffer_delete(editor.buffer, mapping.delete);
         } else if (isprint(ch) || ch == '\r') {
-            buffer_insert(&editor.buffer, ch);
+            buffer_insert(editor.buffer, ch);
         }
     }
-
-    buffer_free(&editor.buffer);
-    string_free(&editor.buffer.path);
 
     string_free(&editor.search);
     string_free(&editor.query);
