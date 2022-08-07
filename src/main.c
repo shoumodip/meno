@@ -475,6 +475,9 @@ void buffer_insert(Buffer *buffer, char ch)
         buffer->cursor.x = 0;
 
         buffer_anchor_fix(buffer);
+    } else if (ch == '\t') {
+        string_insert(buffer->lines + buffer->cursor.y, buffer->cursor.x, "    ", 4);
+        buffer->cursor.x += 4;
     }
 }
 
@@ -1272,7 +1275,7 @@ int main(int argc, char **argv)
             mapping.buffer(editor.buffer);
         } else if (mapping.delete) {
             buffer_delete(editor.buffer, mapping.delete);
-        } else if (isprint(ch) || ch == '\r') {
+        } else if (isprint(ch) || ch == '\r' || ch == '\t') {
             buffer_insert(editor.buffer, ch);
         }
     }
